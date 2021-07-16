@@ -33,7 +33,6 @@ pub struct ReputationNet {
 impl ReputationNet {
     #[allow(unused_variables)]
     pub async fn new(local_peer_id: PeerId) -> Self {
-
         #[allow(unused_mut)]
         let mut result = Self {
             #[cfg(floodsub)]
@@ -52,9 +51,22 @@ impl ReputationNet {
 
     pub fn handle_input(&mut self, what: &str) {
         /* for now, interpret input lines as entities and store them */
-        let statement = what.parse().unwrap();
-        let (id, inserted) = block_on(self.storage.lookup_statement(&statement)).unwrap();
-        println!("{} statement {:?} has id {}", if inserted {"newly inserted"} else {"previously existing"}, &statement, &id);
+        match what.parse() {
+            Ok(statement) => match block_on(self.storage.lookup_statement(&statement)) {
+                Ok((id, inserted)) => println!(
+                    "{} statement {} has id {}",
+                    if inserted {
+                        "newly inserted"
+                    } else {
+                        "previously existing"
+                    },
+                    &statement,
+                    &id
+                ),
+                e => println!("No matching template: {:?}", e),
+            },
+            e => println!("Invalid statement format: {:?}", e),
+        };
     }
 }
 

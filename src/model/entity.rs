@@ -11,15 +11,15 @@ use super::{template::Template, PublicKey};
 // EntityType is used within Templates
 #[derive(Clone, PartialEq, Debug)]
 pub enum EntityType {
-    Domain = 1,
-    EMail = 2,
-    AS = 3,
-    IPv4 = 4,
-    IPv6 = 5,
-    Signer = 6,
-    Url = 7,
-    HashedEMail = 8,
-    Template = 9,
+    Template = 1,
+    Signer = 2,
+    Domain = 3,
+    EMail = 4,
+    HashedEMail = 5,
+    AS = 6,
+    IPv4 = 7,
+    IPv6 = 8,
+    Url = 9,
 }
 
 impl Display for EntityType {
@@ -137,36 +137,15 @@ impl Display for Entity {
 impl FromStr for Entity {
     type Err = InvalidEntity;
     fn from_str(string: &str) -> Result<Self, InvalidEntity> {
-        // crude deserialization based on checking individual cases
-        if string.starts_with("http://") || string.starts_with("https://") {
-            Ok(Entity::Url(string.into()))
-        } else if string.starts_with("#@") {
-            Ok(Entity::HashedEMail(string[2..].into()))
-        } else if string.contains("@") {
-            Ok(Entity::EMail(string.into()))
-        } else if let Ok(cidr) = Ipv4Cidr::from_str(string) {
-            Ok(Entity::IPv4(cidr))
-        } else if let Ok(cidr) = Ipv6Cidr::from_str(string) {
-            Ok(Entity::IPv6(cidr))
-        } else if string.contains(".") {
-            Ok(Entity::Domain(string.into()))
-        } else if string.starts_with("AS") {
-            if let Ok(num) = u32::from_str(&string[2..]) {
-                Ok(Entity::AS(num))
-            } else {
-                Err(InvalidEntity {})
-            }
-        } else if let Ok(pubkey) = PublicKey::from_str(string) {
-            Ok(Entity::Signer(pubkey))
-        } else if let Ok(template) = Template::from_str(string) {
-            Ok(Entity::Template(template))
-        } else {
-            Err(InvalidEntity {})
+        match nom::combinator::all_consuming(super::parser::entity)(string) {
+            Ok((_, entity)) => Ok(entity),
+            _ => Err(InvalidEntity {}),
         }
     }
 }
 
 mod tests {
+
     use std::str::FromStr;
 
     use cidr::Ipv4Cidr;

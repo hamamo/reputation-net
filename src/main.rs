@@ -5,7 +5,6 @@ use std::{
 
 use async_std::io;
 use futures::{executor::block_on, future, prelude::*};
-use log;
 use libp2p::{core::multiaddr::Protocol, identity, Multiaddr, PeerId, Swarm};
 
 mod model;

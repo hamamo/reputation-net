@@ -50,14 +50,15 @@ impl Storage {
             "create table statement(
                 id integer primary key,
                 template_id integer not null,
-                entity_id_1 integer not null,
-                entity_id_2 integer,
-                entity_id_3 integer,
-                foreign key(template_id) references entity(id),
-                foreign key(entity_id_1) references entity(id),
-                foreign key(entity_id_2) references entity(id),
-                foreign key(entity_id_3) references entity(id)
-
+                foreign key(template_id) references entity(id)
+            )",
+            "create table statement_entity(
+                statement_id integer not null,
+                position integer not null,
+                entity_id integer not null,
+                foreign key(statement_id) references statement(id),
+                foreign key(entity_id) references entity(id),
+                unique(statement_id,position)
             )",
             "create table opinion(
                 id integer primary key,
@@ -85,9 +86,11 @@ impl Storage {
             }
         }
 
-        // insert a template, this is currently manual
-        let entity = parser::entity("template(Template)").unwrap().1;
+        // insert the root template, this is currently manual
+        let entity = Entity::from_str("template(Template)").unwrap();
         self.lookup_entity(&entity).await.unwrap();
+        let statement = Statement::from_str("template(template(Template))").unwrap();
+        self.lookup_statement(&statement).await.unwrap();
     }
 
     pub async fn lookup_entity(&mut self, entity: &Entity) -> Result<LookupResult, Error> {
@@ -156,49 +159,29 @@ impl Storage {
         // lookup entities before creating our own transaction, as we only want to use one transaction at a time
 
         let template_id = self.find_matching_template(statement).await?.0;
-        let entity_id_1 = self.lookup_entity(&statement.entities[0]).await?.0;
-        let mut entity_id_2 = None;
-        let mut entity_id_3 = None;
-        let query = match statement.entities.len() {
-            1 => sqlx::query(
-                "select id from statement
-                        where template_id = ?
-                        and entity_id_1 = ?
-                        and entity_id_2 is null
-                        and entity_id_3 is null",
-            )
-            .bind(template_id)
-            .bind(entity_id_1),
-            2 => {
-                entity_id_2 = Some(self.lookup_entity(&statement.entities[1]).await?.0);
-                sqlx::query(
-                    "select id from statement
-                        where template_id = ?
-                        and entity_id_1 = ?
-                        and entity_id_2 = ?
-                        and entity_id_3 is null",
-                )
-                .bind(template_id)
-                .bind(entity_id_1)
-                .bind(entity_id_2)
-            }
-            3 => {
-                entity_id_2 = Some(self.lookup_entity(&statement.entities[1]).await?.0);
-                entity_id_3 = Some(self.lookup_entity(&statement.entities[2]).await?.0);
-                sqlx::query(
-                    "select id from statement
-                        where template_id = ?
-                        and entity_id_1 = ?
-                        and entity_id_2 = ?
-                        and entity_id_3 = ?",
-                )
-                .bind(template_id)
-                .bind(entity_id_1)
-                .bind(entity_id_2)
-                .bind(entity_id_3)
-            },
-            _ => panic!("expected 1..3 entities in statement")
-        };
+        let mut entity_ids: Vec<Id> = vec![];
+        for entity in &statement.entities {
+            let entity_id = self.lookup_entity(entity).await?.0;
+            entity_ids.push(entity_id);
+        }
+        let mut query_s = "select s.id from statement s".to_string();
+        for (pos, _entity_id) in entity_ids.iter().enumerate() {
+            let index = pos + 1;
+            query_s.push_str(&format!(
+                "
+                join statement_entity e{}
+                on e{}.statement_id=s.id
+                and e{}.position={}
+                and e{}.entity_id=?",
+                index, index, index, index, index
+            ));
+        }
+        query_s.push_str(" where s.template_id=?");
+        let mut query = sqlx::query(&query_s);
+        for entity_id in &entity_ids {
+            query = query.bind(entity_id);
+        }
+        query = query.bind(template_id);
         let mut tx = self.pool.begin().await.unwrap();
         let result = query
             .map(|row: SqliteRow| -> Id { row.get::<Id, &str>("id") })
@@ -210,20 +193,24 @@ impl Storage {
                 Ok((id, false))
             }
             None => {
-                sqlx::query(
-                    "insert into statement(template_id,entity_id_1,entity_id_2,entity_id_3) values(?,?,?,?)",
-                )
-                .bind(template_id)
-                .bind(entity_id_1)
-                .bind(entity_id_2)
-                .bind(entity_id_3)
-                .execute(&mut tx)
-                .await
-                .expect("could insert");
+                sqlx::query("insert into statement(template_id) values(?)")
+                    .bind(template_id)
+                    .execute(&mut tx)
+                    .await
+                    .expect("could not insert statement");
                 let id = sqlx::query("select last_insert_rowid()")
                     .map(|row: SqliteRow| -> Id { row.get::<Id, usize>(0) })
                     .fetch_one(&mut tx)
                     .await?;
+                for (pos, entity_id) in entity_ids.iter().enumerate() {
+                    sqlx::query("insert into statement_entity(statement_id, position, entity_id) values(?,?,?)")
+                    .bind(id)
+                    .bind((pos+1) as Id)
+                    .bind(entity_id)
+                    .execute(&mut tx)
+                    .await
+                    .expect("could not insert statement_entity");
+                }
                 tx.commit().await?;
                 Ok((id, true))
             }

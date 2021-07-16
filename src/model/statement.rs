@@ -41,11 +41,12 @@ impl Display for Statement {
         write!(f, "{}(", self.name)?;
         let mut first = true;
         for entity in &self.entities {
-            write!(f, "{}", percent_encode(&entity.to_string()))?;
             if first {
-                first = false;
+                first = false
+            } else {
                 write!(f, ",")?;
             }
+            write!(f, "{}", percent_encode(&entity.to_string()))?;
         }
         write!(f, ")")
     }
@@ -62,9 +63,9 @@ impl fmt::Display for InvalidStatement {
 impl FromStr for Statement {
     type Err = InvalidStatement;
     fn from_str(s: &str) -> Result<Self, InvalidStatement> {
-        match parser::statement(s) {
+        match nom::combinator::all_consuming(parser::statement)(s) {
             Ok((_, stmt)) => Ok(stmt),
-            _ => Err(InvalidStatement)
+            _ => Err(InvalidStatement),
         }
     }
 }
