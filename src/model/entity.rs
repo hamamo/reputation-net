@@ -128,7 +128,7 @@ impl Display for Entity {
             Entity::IPv6(ip) => write!(f, "{}", ip),
             Entity::Signer(pk) => write!(f, "{}", pk),
             Entity::Url(s) => write!(f, "{}", s),
-            Entity::HashedEMail(s) => write!(f, "#@{}", s),
+            Entity::HashedEMail(s) => write!(f, "@#{}", s),
             Entity::Template(t) => write!(f, "{}", t),
         }
     }

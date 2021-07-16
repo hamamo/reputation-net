@@ -3,6 +3,8 @@ use std::{
     str::FromStr,
 };
 
+use nom::combinator::all_consuming;
+
 use super::{entity::Entity, parser, percent_decode, percent_encode, template::Template};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -13,25 +15,23 @@ pub struct Statement {
 
 impl Statement {
     pub fn new(name: &str, entities: Vec<Entity>) -> Self {
-        Statement {
-            name: name.to_string(),
+        Self {
+            name: name.into(),
             entities,
         }
     }
 
     pub fn matches_template(&self, template: &Template) -> bool {
-        if self.name != template.name {
-            return false;
-        }
-        let entity_iterator = self.entities.iter();
-        let type_iterator = template.entity_types.iter();
-        for (entity, entity_type_list) in entity_iterator.zip(type_iterator) {
-            let entity_type = &entity.entity_type();
-            if !entity_type_list.contains(entity_type) {
-                return false;
+        self.name == template.name && {
+            for (entity, entity_type_list) in self.entities.iter().zip(template.entity_types.iter())
+            {
+                let entity_type = &entity.entity_type();
+                if !entity_type_list.contains(entity_type) {
+                    return false;
+                }
             }
+            true
         }
-        true
     }
 }
 
@@ -63,7 +63,7 @@ impl fmt::Display for InvalidStatement {
 impl FromStr for Statement {
     type Err = InvalidStatement;
     fn from_str(s: &str) -> Result<Self, InvalidStatement> {
-        match nom::combinator::all_consuming(parser::statement)(s) {
+        match all_consuming(parser::statement)(s) {
             Ok((_, stmt)) => Ok(stmt),
             _ => Err(InvalidStatement),
         }

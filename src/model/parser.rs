@@ -69,8 +69,11 @@ fn label(i: &str) -> nom::IResult<&str, &str> {
 }
 
 // a domain name
-fn domain(i: &str) -> IResult<&str, &str> {
-    recognize(tuple((label, tag("."), separated_list1(tag("."), label))))(i)
+fn domain(i: &str) -> IResult<&str, Entity> {
+    map(
+        recognize(tuple((label, tag("."), separated_list1(tag("."), label)))),
+        |s| Entity::Domain(s.into()),
+    )(i)
 }
 
 // localpart - does not handle quoted strings and comments yet
@@ -79,79 +82,92 @@ fn localpart(i: &str) -> IResult<&str, &str> {
 }
 
 // an email address
-fn email(i: &str) -> IResult<&str, &str> {
-    recognize(tuple((localpart, tag("@"), domain)))(i)
+fn email(i: &str) -> IResult<&str, Entity> {
+    map(recognize(tuple((localpart, tag("@"), domain))), |s| {
+        Entity::EMail(s.into())
+    })(i)
 }
 
-// an AS number
-fn asn(i: &str) -> IResult<&str, u32> {
+// base64 string - returns matched characters
+fn base64(i: &str) -> IResult<&str, &str> {
+    recognize(tuple((
+        many1(alt((alphanumeric1, is_a("./")))),
+        many0(is_a("=")),
+    )))(i)
+}
+
+// a hashed email address - can be either raw input or already hashed base64
+fn hashed_email(i: &str) -> IResult<&str, Entity> {
+    let (i, _) = tag("@#")(i)?;
+    alt((
+        map(recognize(email), |s| Entity::hashed_email_for(s)),
+        map(base64, |s| Entity::HashedEMail(s.into())),
+    ))(i)
+}
+
+// an AS
+fn asn(i: &str) -> IResult<&str, Entity> {
     let (i, _) = tag("AS")(i)?;
-    map_res(digit1, |s: &str| s.parse::<u32>())(i)
+    map(map_res(digit1, |s: &str| s.parse::<u32>()), |num| {
+        Entity::AS(num)
+    })(i)
 }
 
 // an IPv4 CIDR value
-fn ipv4(i: &str) -> IResult<&str, Ipv4Cidr> {
-    map_res(
-        recognize(tuple((
-            digit1,
-            tag("."),
-            digit1,
-            tag("."),
-            digit1,
-            tag("."),
-            digit1,
-            opt(tuple((tag("/"), digit1))),
-        ))),
-        |s: &str| s.parse::<Ipv4Cidr>(),
+fn ipv4(i: &str) -> IResult<&str, Entity> {
+    map(
+        map_res(
+            recognize(tuple((
+                digit1,
+                tag("."),
+                digit1,
+                tag("."),
+                digit1,
+                tag("."),
+                digit1,
+                opt(tuple((tag("/"), digit1))),
+            ))),
+            |s: &str| s.parse::<Ipv4Cidr>(),
+        ),
+        |cidr| Entity::IPv4(cidr),
     )(i)
 }
 
 // an IPv6 CIDR value
-fn ipv6(i: &str) -> IResult<&str, Ipv6Cidr> {
-    map_res(
-        recognize(many1(is_a("0123456789ABCDEFabcdef:/"))),
-        |s: &str| s.parse::<Ipv6Cidr>(),
+fn ipv6(i: &str) -> IResult<&str, Entity> {
+    map(
+        map_res(
+            recognize(many1(is_a("0123456789ABCDEFabcdef:/"))),
+            |s: &str| s.parse::<Ipv6Cidr>(),
+        ),
+        |cidr| Entity::IPv6(cidr),
     )(i)
 }
 
-// top level rules
-pub fn template(i: &str) -> IResult<&str, Template> {
-    let (i, name) = name(i)?;
-    let (i, _) = tag("(")(i)?;
-    let (i, entity_types) = entity_types(i)?;
-    let (i, _) = tag(")")(i)?;
-    Ok((
-        i,
-        Template {
-            name: name.into(),
-            entity_types,
+pub fn template(i: &str) -> IResult<&str, Entity> {
+    map(
+        tuple((name, tag("("), entity_types, tag(")"))),
+        |(name, _, entity_types, _)| {
+            Entity::Template(Template {
+                name: name.into(),
+                entity_types,
+            })
         },
-    ))
+    )(i)
 }
 
 pub fn entity(i: &str) -> IResult<&str, Entity> {
-    alt((
-        map(email, |s: &str| Entity::EMail(s.into())),
-        map(template, |t: Template| Entity::Template(t)),
-        map(asn, |num: u32| Entity::AS(num)),
-        map(ipv4, |s: Ipv4Cidr| Entity::IPv4(s)),
-        map(ipv6, |s: Ipv6Cidr| Entity::IPv6(s)),
-        map(domain, |s: &str| Entity::Domain(s.into())),
-    ))(i)
+    alt((email, hashed_email, template, asn, ipv4, ipv6, domain))(i)
 }
 
 pub fn statement(i: &str) -> IResult<&str, Statement> {
-    let (i, name) = name(i)?;
-    let (i, _) = tag("(")(i)?;
-    let (i, entities) = separated_list1(tag(","), entity)(i)?;
-    let (i, _) = tag(")")(i)?;
-    Ok((
-        i,
-        Statement {
+    map(
+        tuple((name, tag("("), separated_list1(tag(","), entity), tag(")"))),
+        |(name, _, entities, _)| Statement {
             name: name.into(),
             entities,
         },
-    ))
+    )(i)
 }
 
 mod tests {
@@ -160,18 +176,31 @@ mod tests {
     #[test]
     fn email() {
         assert_eq!(
-            ("", "user@example.com"),
+            ("", Entity::EMail("user@example.com".into())),
             super::email("user@example.com").unwrap()
         );
         assert_eq!(
-            (",", "user@example.com"),
+            (",", Entity::EMail("user@example.com".into())),
             super::email("user@example.com,").unwrap()
         );
     }
     #[test]
+    fn hashed_email() {
+        let entity = Entity::HashedEMail("tMmiiTI7IaAcPpQPFQ65uMVCWH8av9jw4cwf/F5HVRQ=".into());
+        assert_eq!(
+            ("", entity.clone()),
+            super::hashed_email("@#user@example.com").unwrap()
+        );
+
+        assert_eq!(
+            (",", entity),
+            super::hashed_email("@#user@example.com,").unwrap()
+        );
+    }
+    #[test]
     fn asn() {
-        assert_eq!(("", 123), super::asn("AS123").unwrap());
-        assert_eq!((",", 123), super::asn("AS123,").unwrap());
+        assert_eq!(("", Entity::AS(123)), super::asn("AS123").unwrap());
+        assert_eq!((",", Entity::AS(123)), super::asn("AS123,").unwrap());
     }
     #[test]
     fn statement() {

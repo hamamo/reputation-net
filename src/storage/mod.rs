@@ -50,7 +50,9 @@ impl Storage {
             "create table statement(
                 id integer primary key,
                 template_id integer not null,
-                foreign key(template_id) references entity(id)
+                first_entity_id integer not null,
+                foreign key(template_id) references entity(id),
+                foreign key(first_entity_id) references entity(id)
             )",
             "create table statement_entity(
                 statement_id integer not null,
@@ -164,24 +166,24 @@ impl Storage {
             let entity_id = self.lookup_entity(entity).await?.0;
             entity_ids.push(entity_id);
         }
+        let first_entity_id = entity_ids.remove(0);
         let mut query_s = "select s.id from statement s".to_string();
         for (pos, _entity_id) in entity_ids.iter().enumerate() {
-            let index = pos + 1;
             query_s.push_str(&format!(
                 "
                 join statement_entity e{}
                 on e{}.statement_id=s.id
                 and e{}.position={}
                 and e{}.entity_id=?",
-                index, index, index, index, index
+                pos, pos, pos, pos, pos
             ));
         }
-        query_s.push_str(" where s.template_id=?");
+        query_s.push_str(" where s.template_id=? and s.first_entity_id=?");
         let mut query = sqlx::query(&query_s);
         for entity_id in &entity_ids {
             query = query.bind(entity_id);
         }
-        query = query.bind(template_id);
+        query = query.bind(template_id).bind(first_entity_id);
         let mut tx = self.pool.begin().await.unwrap();
         let result = query
             .map(|row: SqliteRow| -> Id { row.get::<Id, &str>("id") })
@@ -193,8 +195,9 @@ impl Storage {
                 Ok((id, false))
             }
             None => {
-                sqlx::query("insert into statement(template_id) values(?)")
+                sqlx::query("insert into statement(template_id,first_entity_id) values(?,?)")
                     .bind(template_id)
+                    .bind(first_entity_id)
                     .execute(&mut tx)
                     .await
                     .expect("could not insert statement");
@@ -205,7 +208,7 @@ impl Storage {
                 for (pos, entity_id) in entity_ids.iter().enumerate() {
                     sqlx::query("insert into statement_entity(statement_id, position, entity_id) values(?,?,?)")
                     .bind(id)
-                    .bind((pos+1) as Id)
+                    .bind(pos as Id)
                     .bind(entity_id)
                     .execute(&mut tx)
                     .await

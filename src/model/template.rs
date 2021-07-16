@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use super::parser;
 
-use super::entity::EntityType;
+use super::entity::{Entity,EntityType};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Template {
@@ -47,8 +47,8 @@ impl FromStr for Template {
 
     fn from_str(input: &str) -> Result<Self, InvalidTemplate> {
         match nom::combinator::all_consuming(parser::template)(input) {
-            Ok((_, template)) => Ok(template),
-            Err(_) => Err(InvalidTemplate {}),
+            Ok((_, Entity::Template(template))) => Ok(template),
+            _ => Err(InvalidTemplate {}),
         }
     }
 }
