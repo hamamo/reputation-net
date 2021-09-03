@@ -12,3 +12,6 @@ a date and a validity timespan for which the opinion should be considered valid.
 
 Users of this information must consider how much they trust each signer in their evaluation of statements.
 In addition they need to define policies that determine how this information should affect the handling of e-mail messages or other interactions (web forms etc.).
+
+### Note
+There's a secp256k1 key used for unit testing. Since this key isn't used for anything but these tests, it is safe to have it in a public repository.

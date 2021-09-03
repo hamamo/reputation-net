@@ -4,39 +4,33 @@ use libp2p::identity::Keypair;
 
 mod entity;
 mod opinion;
-mod publickey;
-mod template;
-mod statement;
-mod trust;
 pub mod parser;
+mod publickey;
+mod statement;
+mod template;
+mod trust;
 pub use entity::{Entity, EntityType};
-pub use template::Template;
 pub use opinion::Opinion;
 pub use publickey::{PublicKey, Signature};
 pub use statement::Statement;
+pub use template::Template;
 pub use trust::Trust;
 
 fn percent_encode(s: &str) -> String {
-    const ESCAPE: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b',').add(b';').add(b'(').add(b')');
-    utf8_percent_encode(s,ESCAPE).to_string()
+    const ESCAPE: &AsciiSet = &CONTROLS
+        .add(b' ')
+        .add(b'"')
+        .add(b',')
+        .add(b';')
+        .add(b'(')
+        .add(b')');
+    utf8_percent_encode(s, ESCAPE).to_string()
 }
 
 fn percent_decode(s: &str) -> String {
     percent_decode_str(s).decode_utf8().unwrap().to_string()
 }
 
-// a DER key created by me. This should be considered public knowledge now, never trust that key
-const KEY_BASE64: &str =
-        "MHQCAQEEIJjTd4ks9PIRt4pFOGdhUYnKIkDrep7mkI7Se8QII8xToAcGBSuBBAAKoUQDQgAEwIfR\
-         9vu28FoqiEzu9iADY6gqnQfP8q9WzAcLQ0kwfVz5dnEOHKssuQV+DFHlHM33CHr8uPAShT7uazCf\
-         H6poUw==";
-
-fn test_signer() -> Entity {
-    let mut der_bytes = base64::decode(KEY_BASE64).unwrap();
-    let keypair = Keypair::secp256k1_from_der(&mut der_bytes).unwrap();
-    let pk = keypair.public();
-    Entity::Signer(PublicKey{key: pk})
-}
 #[cfg(test)]
 
 mod tests {
@@ -45,6 +39,19 @@ mod tests {
     use super::*;
     use entity::Entity;
     use opinion::Opinion;
+
+    // a DER key created by me. This should be considered public knowledge now, never trust that key
+    const KEY_BASE64: &str =
+        "MHQCAQEEIJjTd4ks9PIRt4pFOGdhUYnKIkDrep7mkI7Se8QII8xToAcGBSuBBAAKoUQDQgAEwIfR\
+         9vu28FoqiEzu9iADY6gqnQfP8q9WzAcLQ0kwfVz5dnEOHKssuQV+DFHlHM33CHr8uPAShT7uazCf\
+         H6poUw==";
+
+    fn test_signer() -> Entity {
+        let mut der_bytes = base64::decode(KEY_BASE64).unwrap();
+        let keypair = Keypair::secp256k1_from_der(&mut der_bytes).unwrap();
+        let pk = keypair.public();
+        Entity::Signer(PublicKey { key: pk })
+    }
 
     #[test]
     fn signing() {
@@ -66,7 +73,10 @@ mod tests {
             signature: None,
         };
         // print unsigned opinion
-        assert_eq!(opinion.to_string(), "abuse_contact(example.com,abuse@example.com);12345;365;0;3;as%20per%20whois%20info");
+        assert_eq!(
+            opinion.to_string(),
+            "abuse_contact(example.com,abuse@example.com);12345;365;0;3;as%20per%20whois%20info"
+        );
         let opinion = opinion.sign_using(keypair);
         // print signed opinion
         let opinion_string = opinion.to_string();
@@ -81,6 +91,9 @@ mod tests {
     #[test]
     fn signer_display() {
         let signer = test_signer();
-        assert_eq!(signer.to_string(), "secp256k1:A8CH0fb7tvBaKohM7vYgA2OoKp0Hz/KvVswHC0NJMH1c");
+        assert_eq!(
+            signer.to_string(),
+            "secp256k1:A8CH0fb7tvBaKohM7vYgA2OoKp0Hz/KvVswHC0NJMH1c"
+        );
     }
 }

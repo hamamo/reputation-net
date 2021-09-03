@@ -123,7 +123,7 @@ impl Storage {
                         .bind(string)
                         .execute(&mut tx)
                         .await
-                        .expect("could insert");
+                        .expect("insert entity");
                     let id = sqlx::query("select last_insert_rowid()")
                         .map(|row: SqliteRow| -> Id { row.get::<Id, usize>(0) })
                         .fetch_one(&mut tx)
@@ -247,7 +247,7 @@ impl Storage {
             .await
         {
             let entity_id = row.get::<Id, usize>(0);
-            let mut key_bytes = base64::decode(row.get::<String, usize>(1)).expect("base64 decode");
+            let key_bytes = base64::decode(row.get::<String, usize>(1)).expect("base64 decode");
             let privkey = libp2p::identity::secp256k1::SecretKey::from_bytes(key_bytes).expect("secp256k1 decode");
             let signer = self.get_entity(entity_id).await?.unwrap();
             let keypair = Keypair::Secp256k1(libp2p::identity::secp256k1::Keypair::from(privkey));
@@ -267,7 +267,7 @@ impl Storage {
             .bind(privkey)
             .execute(&mut tx)
             .await
-            .expect("could not insert trust");
+            .expect("insert trust");
             tx.commit().await?;
             Ok(trust)
         }
