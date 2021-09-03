@@ -5,15 +5,16 @@ use nom::{
     self,
     branch::alt,
     bytes::complete::{is_a, tag},
-    character::complete::{alpha1, alphanumeric1, digit1},
+    character::complete::{alpha1, alphanumeric1, digit1, space1},
     combinator::{map, map_res, opt, recognize},
     error::Error,
     multi::{many0, many1, separated_list1},
     sequence::{pair, tuple},
     IResult,
 };
+use std::str::FromStr;
 
-use super::{Entity, EntityType, Statement, Template};
+use super::{Entity, EntityType, Statement, Template, PublicKey};
 
 // nom parser utilities
 fn entity_type(i: &str) -> nom::IResult<&str, EntityType> {
@@ -137,7 +138,11 @@ fn ipv4(i: &str) -> IResult<&str, Entity> {
 fn ipv6(i: &str) -> IResult<&str, Entity> {
     map(
         map_res(
-            recognize(many1(is_a("0123456789ABCDEFabcdef:/"))),
+            recognize(tuple((
+                many1(is_a("0123456789ABCDEFabcdef")),
+                many1(is_a("0123456789ABCDEFabcdef:")),
+                opt(tuple((tag("/"), digit1))),
+            ))),
             |s: &str| s.parse::<Ipv6Cidr>(),
         ),
         |cidr| Entity::IPv6(cidr),
@@ -156,20 +161,46 @@ pub fn template(i: &str) -> IResult<&str, Entity> {
     )(i)
 }
 
+pub fn signer(i: &str) -> IResult<&str, Entity> {
+    map(recognize(tuple((tag("secp256k1:"), base64))), |s| {
+       Entity::Signer(PublicKey::from_str(&s).expect("public key"))
+    })(i)
+}
+
 pub fn entity(i: &str) -> IResult<&str, Entity> {
-    alt((email, hashed_email, template, asn, ipv4, ipv6, domain))(i)
+    alt((
+        email,
+        hashed_email,
+        template,
+        asn,
+        ipv4,
+        ipv6,
+        domain,
+        signer,
+    ))(i)
 }
 
 pub fn statement(i: &str) -> IResult<&str, Statement> {
-    map(
-        tuple((name, tag("("), separated_list1(tag(","), entity), tag(")"))),
-        |(name, _, entities, _)| Statement {
-            name: name.into(),
-            entities,
-        },
-    )(i)
+    // accept standard form, and optionally human-typeable form with spaces instead of parentheses and commas
+    alt((
+        map(
+            tuple((name, tag("("), separated_list1(tag(","), entity), tag(")"))),
+            |(name, _, entities, _)| Statement {
+                name: name.into(),
+                entities,
+            },
+        ),
+        map(
+            tuple((name, space1, separated_list1(space1, entity))),
+            |(name, _, entities)| Statement {
+                name: name.into(),
+                entities,
+            },
+        ),
+    ))(i)
 }
 
+#[cfg(test)]
 mod tests {
     use crate::model::{Entity, Statement};
 

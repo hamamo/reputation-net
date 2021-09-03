@@ -1,6 +1,8 @@
 // store entities, statements, opinions persistently
 use std::str::FromStr;
 
+use futures::TryFutureExt;
+use libp2p::identity::Keypair;
 // library imports
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow},
@@ -8,7 +10,7 @@ use sqlx::{
 };
 
 // own imports
-use super::model::{parser, Entity, EntityType, Statement, Template};
+use super::model::{parser, Entity, EntityType, Statement, Template, Trust};
 
 const DATABASE_URL: &str = "sqlite:reputation.sqlite3?mode=rwc";
 
@@ -75,7 +77,7 @@ impl Storage {
             "create table trust(
                 signer_id integer not null,
                 level integer not null,
-                key text not null,
+                key text,
                 foreign key(signer_id) references entity(id)
             )",
         ];
@@ -84,7 +86,7 @@ impl Storage {
         for def in defs {
             match sqlx::query(def).execute(&self.pool).await {
                 Ok(result) => println!("{:?}", result),
-                Err(problem) => println!("{:?}", problem),
+                _ => (),
             }
         }
 
@@ -93,10 +95,13 @@ impl Storage {
         self.lookup_entity(&entity).await.unwrap();
         let statement = Statement::from_str("template(template(Template))").unwrap();
         self.lookup_statement(&statement).await.unwrap();
+
+        // make sure an owner trust entry exists
+        self.owner_trust().await;
     }
 
+    // select or insert an entity
     pub async fn lookup_entity(&mut self, entity: &Entity) -> Result<LookupResult, Error> {
-        // select or insert an entity
         let string = entity.to_string();
         let kind = entity.entity_type() as i64;
 
@@ -129,6 +134,21 @@ impl Storage {
             }
             Err(e) => Err(e),
         }
+    }
+
+    // return the entity with the given Id
+    pub async fn get_entity(&mut self, id: Id) -> Result<Option<Entity>, Error> {
+        let mut tx = self.pool.begin().await.unwrap();
+        let result = sqlx::query("select value from entity where id=?")
+        .bind(id)
+        .fetch_optional(&mut tx)
+        .await?;
+        Ok(if let Some(row) = result {
+            let value = row.get::<String, usize>(0);
+            Some(Entity::from_str(&value).unwrap())
+        } else {
+            None
+        })
     }
 
     pub async fn lookup_template(&mut self, template: &Template) -> Result<LookupResult, Error> {
@@ -219,8 +239,44 @@ impl Storage {
             }
         }
     }
+
+    pub async fn owner_trust(&mut self) -> Result<Trust, Error> {
+        let mut tx = self.pool.begin().await.unwrap();
+        if let Ok(row) = sqlx::query("select signer_id, key from trust where level = 0")
+            .fetch_one(&mut tx)
+            .await
+        {
+            let entity_id = row.get::<Id, usize>(0);
+            let mut key_bytes = base64::decode(row.get::<String, usize>(1)).expect("base64 decode");
+            let privkey = libp2p::identity::secp256k1::SecretKey::from_bytes(key_bytes).expect("secp256k1 decode");
+            let signer = self.get_entity(entity_id).await?.unwrap();
+            let keypair = Keypair::Secp256k1(libp2p::identity::secp256k1::Keypair::from(privkey));
+            tx.rollback().await?;
+            Ok(Trust{
+                signer: signer,
+                level: 0,
+                key: Some(keypair)
+            })
+        } else {
+            let trust = Trust::new();
+            let (entity_id, _new) = self.lookup_entity(&trust.signer).await?;
+            let privkey = trust.privkey_string();
+            println!("trust {} {}", entity_id, privkey);
+            sqlx::query("insert into trust(signer_id, level, key) values(?,0,?)")
+            .bind(entity_id)
+            .bind(privkey)
+            .execute(&mut tx)
+            .await
+            .expect("could not insert trust");
+            tx.commit().await?;
+            Ok(trust)
+        }
+
+        
+    }
 }
 
+#[cfg(test)]
 mod tests {
     use futures::executor::block_on;
     use std::str::FromStr;

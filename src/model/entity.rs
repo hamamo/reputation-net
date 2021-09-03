@@ -68,12 +68,6 @@ impl FromStr for EntityType {
     }
 }
 
-impl EntityType {
-    pub fn vec_from_str(string: &str) -> Result<Vec<Self>, InvalidEntityType> {
-        string.split("|").map(|x| Self::from_str(x)).collect()
-    }
-}
-
 #[derive(Clone, PartialEq, Debug)]
 pub enum Entity {
     Domain(String),      // denotes a domain name
@@ -144,6 +138,7 @@ impl FromStr for Entity {
     }
 }
 
+#[cfg(test)]
 mod tests {
 
     use std::str::FromStr;

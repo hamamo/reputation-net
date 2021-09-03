@@ -13,21 +13,25 @@ use libp2p::{
     NetworkBehaviour, PeerId,
 };
 
+use super::model::Statement;
 use super::storage::Storage;
+
+enum Event {
+    NewStatement(Statement, PeerId),
+}
 
 #[derive(NetworkBehaviour)]
 pub struct ReputationNet {
-    #[cfg(floodsub)]
     floodsub: Floodsub,
-    #[cfg(mdns)]
     mdns: Mdns,
     ping: Ping,
 
     #[behaviour(ignore)]
-    #[cfg(floodsub)]
-    topic: Topic,
+    topics: Vec<Topic>,
     #[behaviour(ignore)]
     storage: Storage,
+    #[behaviour(ignore)]
+    events: Vec<Event>,
 }
 
 impl ReputationNet {
@@ -35,17 +39,16 @@ impl ReputationNet {
     pub async fn new(local_peer_id: PeerId) -> Self {
         #[allow(unused_mut)]
         let mut result = Self {
-            #[cfg(floodsub)]
             floodsub: Floodsub::new(local_peer_id),
-            #[cfg(mdns)]
             mdns: Mdns::new(MdnsConfig::default()).await.unwrap(),
             ping: Ping::new(PingConfig::new().with_keep_alive(true)),
-            #[cfg(floodsub)]
-            topic: Topic::new("greeting"),
+            topics: vec![Topic::new("greeting")],
             storage: Storage::new().await,
+            events: vec![],
         };
-        #[cfg(floodsub)]
-        result.floodsub.subscribe(result.topic.clone());
+        for t in &result.topics {
+            result.floodsub.subscribe(t.clone());
+        }
         result
     }
 
@@ -53,38 +56,43 @@ impl ReputationNet {
         /* for now, interpret input lines as entities and store them */
         match what.parse() {
             Ok(statement) => match block_on(self.storage.lookup_statement(&statement)) {
-                Ok((id, inserted)) => println!(
-                    "{} statement {} has id {}",
-                    if inserted {
-                        "newly inserted"
-                    } else {
-                        "previously existing"
-                    },
-                    &statement,
-                    &id
-                ),
+                Ok((id, inserted)) => {
+                    println!(
+                        "{} statement {} has id {}",
+                        if inserted {
+                            "newly inserted"
+                        } else {
+                            "previously existing"
+                        },
+                        &statement,
+                        &id
+                    );
+                    self.floodsub
+                        .publish_any(self.topics[0].clone(), statement.to_string());
+                }
                 e => println!("No matching template: {:?}", e),
             },
             e => println!("Invalid statement format: {:?}", e),
         };
     }
+
+    pub fn handle_events(&mut self) {
+        
+    }
 }
 
-#[cfg(floodsub)]
 impl NetworkBehaviourEventProcess<FloodsubEvent> for ReputationNet {
     // Called when `floodsub` produces an event.
     fn inject_event(&mut self, message: FloodsubEvent) {
         if let FloodsubEvent::Message(message) = message {
-            println!(
-                "Received: '{:?}' from {:?}",
-                String::from_utf8_lossy(&message.data),
-                message.source
-            );
+            if let Ok(statement) = (String::from_utf8_lossy(&message.data)).parse::<Statement>() {
+                println!("Received: {} from {:?}", statement, message);
+                self.events.push(Event::NewStatement(statement, message.source))
+            }
         }
     }
 }
 
-#[cfg(mdns)]
 impl NetworkBehaviourEventProcess<MdnsEvent> for ReputationNet {
     // Called when `mdns` produces an event.
     fn inject_event(&mut self, event: MdnsEvent) {
@@ -92,7 +100,6 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for ReputationNet {
             MdnsEvent::Discovered(list) => {
                 for (peer, addr) in list {
                     println!("discovered {} {}", peer, addr);
-                    #[cfg(floodsub)]
                     self.floodsub.add_node_to_partial_view(peer);
                 }
             }
@@ -100,7 +107,6 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for ReputationNet {
                 for (peer, addr) in list {
                     println!("expired {} {}", peer, addr);
                     if !self.mdns.has_node(&peer) {
-                        #[cfg(floodsub)]
                         self.floodsub.remove_node_from_partial_view(&peer);
                     }
                 }

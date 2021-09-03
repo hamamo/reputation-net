@@ -70,6 +70,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 Poll::Pending => break,
             }
         }
+        swarm.behaviour_mut().handle_events();
         Poll::Pending
     }));
 

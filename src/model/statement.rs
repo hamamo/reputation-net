@@ -70,17 +70,23 @@ impl FromStr for Statement {
     }
 }
 
-#[test]
-fn statement() {
-    let stmt_src = "abuse(example.com,abuse@example.com)";
-    let stmt = Statement::from_str(stmt_src).unwrap();
-    println!("{}", stmt);
-    assert_eq!(stmt_src, stmt.to_string());
-}
+#[cfg(test)]
+mod tests {
+    use super::{Statement,Template};
+    use std::str::FromStr;
 
-#[test]
-fn match_template() {
-    let stmt = Statement::from_str("abuse(example.com,abuse@example.com)").unwrap();
-    let template = Template::from_str("abuse(Domain,EMail|Url)").unwrap();
-    assert!(stmt.matches_template(&template));
+    #[test]
+    fn statement() {
+        let stmt_src = "abuse(example.com,abuse@example.com)";
+        let stmt = Statement::from_str(stmt_src).unwrap();
+        println!("{}", stmt);
+        assert_eq!(stmt_src, stmt.to_string());
+    }
+
+    #[test]
+    fn match_template() {
+        let stmt = Statement::from_str("abuse(example.com,abuse@example.com)").unwrap();
+        let template = Template::from_str("abuse(Domain,EMail|Url)").unwrap();
+        assert!(stmt.matches_template(&template));
+    }
 }
