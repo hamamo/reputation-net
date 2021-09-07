@@ -1,4 +1,5 @@
-use async_std::task::block_on;
+use async_std::task::{block_on, Poll};
+use futures::{prelude::*};
 
 #[allow(unused_imports)]
 use libp2p::{
@@ -60,7 +61,7 @@ impl ReputationNet {
                     println!(
                         "{} statement {} has id {}",
                         if inserted {
-                            "newly inserted"
+                            "newly created"
                         } else {
                             "previously existing"
                         },
@@ -77,7 +78,14 @@ impl ReputationNet {
     }
 
     pub fn handle_events(&mut self) {
-        
+        while let Some(event) = self.events.pop() {
+            match event {
+                Event::NewStatement(stmt, peer_id) => {
+                    println!("new statement {} from peer {}", stmt, peer_id);
+                }
+                _ => ()
+            }
+        }
     }
 }
 

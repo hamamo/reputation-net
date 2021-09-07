@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let poll = swarm.poll_next_unpin(cx);
             match poll {
                 Poll::Ready(Some(event)) => {
-                    println!("{:?}", event);
+                    // println!("{:?}", event);
                 }
                 Poll::Ready(None) => return poll,
                 Poll::Pending => break,
@@ -59,15 +59,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         loop {
             let poll = stdin.poll_next_unpin(cx);
-            if let Poll::Ready(evt) = &poll {
-                println!("stdin: {:?}", evt);
-            }
             match poll {
-                Poll::Ready(Some(line)) => {
-                    swarm.behaviour_mut().handle_input(&line.unwrap());
+                Poll::Ready(Some(Ok(line))) => {
+                    swarm.behaviour_mut().handle_input(&line);
                 }
                 Poll::Ready(None) => panic!("Stdin closed"),
                 Poll::Pending => break,
+                Poll::Ready(Some(e)) => panic!("{:?}", e)
             }
         }
         swarm.behaviour_mut().handle_events();

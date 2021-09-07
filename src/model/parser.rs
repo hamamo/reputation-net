@@ -92,7 +92,7 @@ fn email(i: &str) -> IResult<&str, Entity> {
 // base64 string - returns matched characters
 fn base64(i: &str) -> IResult<&str, &str> {
     recognize(tuple((
-        many1(alt((alphanumeric1, is_a("./")))),
+        many1(alt((alphanumeric1, is_a("./+")))),
         many0(is_a("=")),
     )))(i)
 }
