@@ -68,9 +68,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             event = swarm.next() => {
                 println!("swarm event: {:?}", event);
             },
-            Some(event) = receiver.next() => {
-                println!("stdin event: {:?}", event);
-                swarm.behaviour().handle_input(&event).await;
+            event = receiver.next() => {
+                match event {
+                    Some(s) => {
+                        println!("stdin event: {:?}", s);
+                        swarm.behaviour_mut().handle_input(&s).await;
+                    }
+                    None => panic!("end of input?")
+                }
+                
             }
         }
     }

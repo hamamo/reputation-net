@@ -63,7 +63,7 @@ impl ReputationNet {
     pub async fn handle_input(&mut self, what: &str) {
         /* for now, interpret input lines as entities and store them */
         match what.parse() {
-            Ok(statement) => match block_on(self.storage.lookup_statement(&statement)) {
+            Ok(statement) => match self.storage.lookup_statement(&statement).await {
                 Ok((id, inserted)) => {
                     println!(
                         "{} statement {} has id {}",
@@ -79,9 +79,9 @@ impl ReputationNet {
                         .publish(self.topics[0].clone(), statement.to_string())
                         .expect("could publish");
                 }
-                e => warn!("No matching template: {:?}", e),
+                e => println!("No matching template: {:?}", e),
             },
-            e => warn!("Invalid statement format: {:?}", e),
+            e => println!("Invalid statement format: {:?}", e),
         };
     }
 
