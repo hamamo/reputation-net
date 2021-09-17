@@ -1,7 +1,7 @@
 use async_std::task::{block_on, Poll};
-use futures::{prelude::*};
+use futures::prelude::*;
+use log::{info,warn};
 
-use libp2p::{gossipsub::{GossipsubConfig, GossipsubEvent, MessageAuthenticity}, identity::Keypair};
 #[allow(unused_imports)]
 use libp2p::{
     core::connection::{ConnectedPoint, ConnectionId},
@@ -12,6 +12,10 @@ use libp2p::{
         ProtocolsHandler, SwarmEvent,
     },
     NetworkBehaviour, PeerId,
+};
+use libp2p::{
+    gossipsub::{GossipsubConfig, GossipsubEvent, MessageAuthenticity},
+    identity::Keypair,
 };
 
 use super::model::Statement;
@@ -40,19 +44,23 @@ impl ReputationNet {
         let keypair = Keypair::generate_ed25519();
         #[allow(unused_mut)]
         let mut result = Self {
-            gossipsub: Gossipsub::new(MessageAuthenticity::Signed(keypair), GossipsubConfig::default()).unwrap(),
+            gossipsub: Gossipsub::new(
+                MessageAuthenticity::Signed(keypair),
+                GossipsubConfig::default(),
+            )
+            .unwrap(),
             mdns: Mdns::new(MdnsConfig::default()).await.unwrap(),
             topics: vec![IdentTopic::new("greeting")],
             storage: Storage::new().await,
             events: vec![],
         };
         for t in &result.topics {
-            result.gossipsub.subscribe(t);
+            result.gossipsub.subscribe(t).expect("subscribe works");
         }
         result
     }
 
-    pub fn handle_input(&mut self, what: &str) {
+    pub async fn handle_input(&mut self, what: &str) {
         /* for now, interpret input lines as entities and store them */
         match what.parse() {
             Ok(statement) => match block_on(self.storage.lookup_statement(&statement)) {
@@ -68,11 +76,12 @@ impl ReputationNet {
                         &id
                     );
                     self.gossipsub
-                        .publish(self.topics[0], statement.to_string());
+                        .publish(self.topics[0].clone(), statement.to_string())
+                        .expect("could publish");
                 }
-                e => println!("No matching template: {:?}", e),
+                e => warn!("No matching template: {:?}", e),
             },
-            e => println!("Invalid statement format: {:?}", e),
+            e => warn!("Invalid statement format: {:?}", e),
         };
     }
 
@@ -80,9 +89,9 @@ impl ReputationNet {
         while let Some(event) = self.events.pop() {
             match event {
                 Event::NewStatement(stmt, peer_id) => {
-                    println!("new statement {} from peer {}", stmt, peer_id);
+                    info!("new statement {} from peer {}", stmt, peer_id);
                 }
-                _ => ()
+                _ => (),
             }
         }
     }
@@ -92,12 +101,17 @@ impl NetworkBehaviourEventProcess<GossipsubEvent> for ReputationNet {
     // Called when `Gossipsub` produces an event.
     fn inject_event(&mut self, event: GossipsubEvent) {
         match event {
-            GossipsubEvent::Message{propagation_source, message_id, message} => {
-                if let Ok(statement) = (String::from_utf8_lossy(&message.data)).parse::<Statement>() {
-                    println!("Received: {} from {:?}", statement, message);
-                } 
-            },
-            _ => println!("Gossipsub event: {:?}", event)
+            GossipsubEvent::Message {
+                propagation_source,
+                message_id,
+                message,
+            } => {
+                if let Ok(statement) = (String::from_utf8_lossy(&message.data)).parse::<Statement>()
+                {
+                    info!("Received: {} from {:?}", statement, message);
+                }
+            }
+            _ => info!("Gossipsub event: {:?}", event),
         }
     }
 }

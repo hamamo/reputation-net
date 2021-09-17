@@ -1,13 +1,10 @@
+use async_std::io;
+use async_std::task::spawn;
+use futures::prelude::*;
+use futures::{channel::mpsc, select, AsyncBufReadExt, StreamExt};
 use std::error::Error;
 
-use async_std::io;
-use futures::{AsyncBufReadExt};
-use libp2p::{
-    identity,
-    multiaddr::Protocol,
-    Multiaddr, PeerId, Swarm,
-};
-
+use libp2p::{identity, multiaddr::Protocol, Multiaddr, PeerId, Swarm};
 
 mod model;
 mod reputation_net;
@@ -48,17 +45,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("Dialing {}", addr)
     }
 
+    let (mut sender, mut receiver) = mpsc::channel::<String>(0);
+
     let mut stdin = io::BufReader::new(io::stdin()).lines();
 
+    spawn(async move {
+        loop {
+            let line = stdin.next().await.expect("could read line");
+            match line {
+                Ok(s) => {
+                    sender.send(s).await.expect("could send");
+                }
+                _ => {
+                    panic!("huh?");
+                }
+            }
+        }
+    });
+
     loop {
-        match combined.next().await.unwrap() {
-            Evt::Stdin(line) => {
-                println!("stdin: {}", line);
-                swarm.behaviour_mut().handle_input(&line);
+        select! {
+            event = swarm.next() => {
+                println!("swarm event: {:?}", event);
             },
-            Evt::Swarm() => println!("event: {:?}", "?"),
+            Some(event) = receiver.next() => {
+                println!("stdin event: {:?}", event);
+                swarm.behaviour().handle_input(&event).await;
+            }
         }
     }
-
-    Ok(())
 }
