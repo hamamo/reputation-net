@@ -1,15 +1,19 @@
-use std::{
-    error::Error,
-    task::{Context, Poll},
-};
+use std::error::Error;
 
 use async_std::io;
-use futures::{executor::block_on, future, prelude::*};
-use libp2p::{core::multiaddr::Protocol, identity, Multiaddr, PeerId, Swarm};
+use futures::{AsyncBufReadExt};
+use libp2p::{
+    identity,
+    multiaddr::Protocol,
+    Multiaddr, PeerId, Swarm,
+};
+
 
 mod model;
 mod reputation_net;
 mod storage;
+
+use reputation_net::ReputationNet;
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -46,31 +50,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut stdin = io::BufReader::new(io::stdin()).lines();
 
-    block_on(future::poll_fn(move |cx: &mut Context<'_>| {
-        loop {
-            let poll = swarm.poll_next_unpin(cx);
-            match poll {
-                Poll::Ready(Some(event)) => {
-                    // println!("{:?}", event);
-                }
-                Poll::Ready(None) => return poll,
-                Poll::Pending => break,
-            }
+    loop {
+        match combined.next().await.unwrap() {
+            Evt::Stdin(line) => {
+                println!("stdin: {}", line);
+                swarm.behaviour_mut().handle_input(&line);
+            },
+            Evt::Swarm() => println!("event: {:?}", "?"),
         }
-        loop {
-            let poll = stdin.poll_next_unpin(cx);
-            match poll {
-                Poll::Ready(Some(Ok(line))) => {
-                    swarm.behaviour_mut().handle_input(&line);
-                }
-                Poll::Ready(None) => panic!("Stdin closed"),
-                Poll::Pending => break,
-                Poll::Ready(Some(e)) => panic!("{:?}", e)
-            }
-        }
-        swarm.behaviour_mut().handle_events();
-        Poll::Pending
-    }));
+    }
 
     Ok(())
 }
