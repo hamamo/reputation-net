@@ -76,6 +76,7 @@ pub enum Entity {
     IPv4(Ipv4Cidr),      // denotes an IPv4 address or address range
     IPv6(Ipv6Cidr),      // denotes an IPv4 address or address range
     Signer(PublicKey),   // denotes a signer
+    #[allow(dead_code)]
     Url(String),         // denotes an URL, for example a contact form
     HashedEMail(String), // hash of an e-mail, to protect personal data
     Template(Template),  // statement template to dynamically add new statement types
@@ -108,6 +109,13 @@ impl Entity {
             Self::Url(_) => EntityType::Url,
             Self::HashedEMail(_) => EntityType::HashedEMail,
             Self::Template(_) => EntityType::Template,
+        }
+    }
+
+    pub fn hash_emails(&self) -> Self {
+        match self {
+            Self::EMail(x) => Self::hashed_email_for(x),
+            _ => self.clone()
         }
     }
 }

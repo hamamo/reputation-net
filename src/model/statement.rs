@@ -5,7 +5,7 @@ use std::{
 
 use nom::combinator::all_consuming;
 
-use super::{entity::Entity, parser, percent_decode, percent_encode, template::Template};
+use super::{entity::Entity, parser, template::Template};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Statement {
@@ -14,6 +14,7 @@ pub struct Statement {
 }
 
 impl Statement {
+    #[allow(dead_code)]
     pub fn new(name: &str, entities: Vec<Entity>) -> Self {
         Self {
             name: name.into(),
@@ -21,6 +22,13 @@ impl Statement {
         }
     }
 
+    pub fn minimal_template(&self) -> Template {
+        Template{
+            name: self.name.clone(),
+            entity_types: self.entities.iter().map(|x| vec![x.entity_type()]).collect()
+        }
+    }
+    
     pub fn matches_template(&self, template: &Template) -> bool {
         self.name == template.name && {
             for (entity, entity_type_list) in self.entities.iter().zip(template.entity_types.iter())
@@ -31,6 +39,15 @@ impl Statement {
                 }
             }
             true
+        }
+    }
+
+    // create a version of self where literal e-mail addresses are replaced by hashed e-mail addresses
+    // hash function is SHA256
+    pub fn hash_emails(&self) -> Self {
+        Self{
+            name: self.name.clone(),
+            entities: self.entities.iter().map(|e| e.hash_emails()).collect()
         }
     }
 }
@@ -46,7 +63,7 @@ impl Display for Statement {
             } else {
                 write!(f, ",")?;
             }
-            write!(f, "{}", percent_encode(&entity.to_string()))?;
+            write!(f, "{}", entity)?;
         }
         write!(f, ")")
     }
@@ -80,6 +97,13 @@ mod tests {
         let stmt_src = "abuse(example.com,abuse@example.com)";
         let stmt = Statement::from_str(stmt_src).unwrap();
         println!("{}", stmt);
+        assert_eq!(stmt_src, stmt.to_string());
+    }
+
+    #[test]
+    fn template_statement() {
+        let stmt_src = "template(exploited_host(Domain|IPv4))";
+        let stmt = Statement::from_str(stmt_src).unwrap();
         assert_eq!(stmt_src, stmt.to_string());
     }
 

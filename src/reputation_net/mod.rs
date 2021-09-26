@@ -1,11 +1,15 @@
-use async_std::task::{block_on, Poll};
-use futures::prelude::*;
-use log::{info,warn};
+
+use futures::{channel::mpsc::Sender};
+use log::{debug, error, info};
 
 #[allow(unused_imports)]
 use libp2p::{
     core::connection::{ConnectedPoint, ConnectionId},
-    gossipsub::{self, Gossipsub, IdentTopic},
+    gossipsub::{
+        self, Gossipsub, GossipsubConfig, GossipsubEvent, IdentTopic, MessageAuthenticity,
+        MessageId,
+    },
+    identity::Keypair,
     mdns::{Mdns, MdnsConfig, MdnsEvent},
     swarm::{
         IntoProtocolsHandler, NetworkBehaviourAction, NetworkBehaviourEventProcess, PollParameters,
@@ -13,16 +17,15 @@ use libp2p::{
     },
     NetworkBehaviour, PeerId,
 };
-use libp2p::{
-    gossipsub::{GossipsubConfig, GossipsubEvent, MessageAuthenticity},
-    identity::Keypair,
-};
+
+
 
 use super::model::Statement;
 use super::storage::Storage;
 
-enum Event {
-    NewStatement(Statement, PeerId),
+#[derive(Debug)]
+pub enum Event {
+    NewStatement(Statement, Option<PeerId>),
 }
 
 #[derive(NetworkBehaviour)]
@@ -35,12 +38,12 @@ pub struct ReputationNet {
     #[behaviour(ignore)]
     storage: Storage,
     #[behaviour(ignore)]
-    events: Vec<Event>,
+    event_sender: Sender<Event>,
 }
 
 impl ReputationNet {
     #[allow(unused_variables)]
-    pub async fn new(local_peer_id: PeerId) -> Self {
+    pub async fn new(local_peer_id: PeerId, event_sender: Sender<Event>) -> Self {
         let keypair = Keypair::generate_ed25519();
         #[allow(unused_mut)]
         let mut result = Self {
@@ -52,7 +55,7 @@ impl ReputationNet {
             mdns: Mdns::new(MdnsConfig::default()).await.unwrap(),
             topics: vec![IdentTopic::new("greeting")],
             storage: Storage::new().await,
-            events: vec![],
+            event_sender: event_sender,
         };
         for t in &result.topics {
             result.gossipsub.subscribe(t).expect("subscribe works");
@@ -62,9 +65,10 @@ impl ReputationNet {
 
     pub async fn handle_input(&mut self, what: &str) {
         /* for now, interpret input lines as entities and store them */
+
         match what.parse() {
-            Ok(statement) => match self.storage.lookup_statement(&statement).await {
-                Ok((id, inserted)) => {
+            Ok(statement) => match self.storage.lookup_statement_hashing_emails(&statement).await {
+                Ok(((id, inserted), actual_statement)) => {
                     println!(
                         "{} statement {} has id {}",
                         if inserted {
@@ -72,26 +76,49 @@ impl ReputationNet {
                         } else {
                             "previously existing"
                         },
-                        &statement,
+                        &actual_statement,
                         &id
                     );
-                    self.gossipsub
-                        .publish(self.topics[0].clone(), statement.to_string())
-                        .expect("could publish");
+                    // we ignore the possible error when no peers are currently connected
+                    match self
+                        .gossipsub
+                        .publish(self.topics[0].clone(), actual_statement.to_string())
+                    {
+                        Ok(_mid) => println!("published ok"),
+                        Err(err) => println!("could not publish: {:?}", err),
+                    };
                 }
-                e => println!("No matching template: {:?}", e),
+                Err(_e) => {
+                    println!("No matching template: {}", statement.minimal_template());
+                    println!("Available:");
+                    for t in self.storage.list_templates(&statement.name).await.iter() {
+                        println!("  {}", t)
+                    }
+                },
             },
-            e => println!("Invalid statement format: {:?}", e),
+            Err(e) => println!("Invalid statement format: {:?}", e),
         };
     }
 
-    pub fn handle_events(&mut self) {
-        while let Some(event) = self.events.pop() {
-            match event {
-                Event::NewStatement(stmt, peer_id) => {
-                    info!("new statement {} from peer {}", stmt, peer_id);
+    pub async fn handle_event(&mut self, event: &Event) {
+        debug!("got event: {:?}", event);
+        match event {
+            Event::NewStatement(statement, _peer) => {
+                match self.storage.lookup_statement(&statement).await {
+                    Ok((id, inserted)) => {
+                        println!(
+                            "{} statement {} has id {}",
+                            if inserted {
+                                "newly created"
+                            } else {
+                                "previously existing"
+                            },
+                            &statement,
+                            &id
+                        );
+                    }
+                    Err(e) => println!("No matching template for {}: {:?}", statement, e),
                 }
-                _ => (),
             }
         }
     }
@@ -106,9 +133,21 @@ impl NetworkBehaviourEventProcess<GossipsubEvent> for ReputationNet {
                 message_id,
                 message,
             } => {
-                if let Ok(statement) = (String::from_utf8_lossy(&message.data)).parse::<Statement>()
-                {
-                    info!("Received: {} from {:?}", statement, message);
+                let string = String::from_utf8_lossy(&message.data);
+                match string.parse::<Statement>() {
+                    Ok(statement) => {
+                        info!("Received: {} from {:?}, id {:?}", statement, propagation_source, message_id);
+                        match self
+                            .event_sender
+                            .try_send(Event::NewStatement(statement, message.source.clone()))
+                        {
+                            Err(e) => error!("could not send event: {:?}", e),
+                            _ => (),
+                        }
+                    }
+                    Err(e) => {
+                        error!("could not parse {:?}: {:?}", string, e);
+                    }
                 }
             }
             _ => info!("Gossipsub event: {:?}", event),
@@ -122,7 +161,7 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for ReputationNet {
         match event {
             MdnsEvent::Discovered(list) => {
                 for (peer, addr) in list {
-                    println!("discovered {} {}", peer, addr);
+                    info!("discovered {} {}", peer, addr);
                     self.gossipsub.add_explicit_peer(&peer);
                 }
             }

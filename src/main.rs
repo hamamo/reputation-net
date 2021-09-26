@@ -2,6 +2,7 @@ use async_std::io;
 use async_std::task::spawn;
 use futures::prelude::*;
 use futures::{channel::mpsc, select, AsyncBufReadExt, StreamExt};
+use log::info;
 use std::error::Error;
 
 use libp2p::{identity, multiaddr::Protocol, Multiaddr, PeerId, Swarm};
@@ -10,18 +11,20 @@ mod model;
 mod reputation_net;
 mod storage;
 
-use reputation_net::ReputationNet;
+use reputation_net::{ReputationNet, Event};
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let local_key = identity::Keypair::generate_ed25519();
     let local_peer_id = PeerId::from(local_key.public());
-    println!("Local peer id: {:?}", local_peer_id);
+    info!("Local peer id: {:?}", local_peer_id);
+    let (mut input_sender, mut input_receiver) = mpsc::channel::<String>(0);
+    let (event_sender, mut event_receiver) = mpsc::channel::<Event>(0);
 
     let mut swarm = {
         let transport = libp2p::development_transport(local_key).await?;
 
-        let behaviour = reputation_net::ReputationNet::new(local_peer_id).await;
+        let behaviour = ReputationNet::new(local_peer_id, event_sender).await;
 
         Swarm::new(transport, behaviour, local_peer_id)
     };
@@ -42,10 +45,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if let Some(addr) = std::env::args().nth(1) {
         let remote = addr.parse()?;
         swarm.dial_addr(remote)?;
-        println!("Dialing {}", addr)
+        info!("Dialing {}", addr)
     }
-
-    let (mut sender, mut receiver) = mpsc::channel::<String>(0);
 
     let mut stdin = io::BufReader::new(io::stdin()).lines();
 
@@ -54,7 +55,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let line = stdin.next().await.expect("could read line");
             match line {
                 Ok(s) => {
-                    sender.send(s).await.expect("could send");
+                    input_sender.send(s).await.expect("could send");
                 }
                 _ => {
                     panic!("huh?");
@@ -65,18 +66,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     loop {
         select! {
-            event = swarm.next() => {
-                println!("swarm event: {:?}", event);
+            _event = swarm.next() => {
+                // println!("swarm event: {:?}", event);
             },
-            event = receiver.next() => {
+            event = input_receiver.next() => {
                 match event {
                     Some(s) => {
-                        println!("stdin event: {:?}", s);
+                        // println!("stdin event: {:?}", s);
                         swarm.behaviour_mut().handle_input(&s).await;
                     }
                     None => panic!("end of input?")
                 }
-                
+            }
+            event = event_receiver.next() => {
+                match event {
+                    Some(e) => {
+                        // println!("network event: {:?}", e);
+                        swarm.behaviour_mut().handle_event(&e).await;
+                    }
+                    None => panic!("end of network?")
+                }
             }
         }
     }

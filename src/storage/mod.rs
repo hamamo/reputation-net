@@ -1,7 +1,7 @@
 // store entities, statements, opinions persistently
-use std::str::FromStr;
+use std::{str::FromStr};
 
-use futures::TryFutureExt;
+
 use libp2p::identity::Keypair;
 // library imports
 use sqlx::{
@@ -10,7 +10,7 @@ use sqlx::{
 };
 
 // own imports
-use super::model::{parser, Entity, EntityType, Statement, Template, Trust};
+use super::model::{Entity, EntityType, Statement, Template, Trust};
 
 const DATABASE_URL: &str = "sqlite:reputation.sqlite3?mode=rwc";
 
@@ -151,6 +151,7 @@ impl Storage {
         })
     }
 
+    #[allow(dead_code)] // used in tests
     pub async fn lookup_template(&mut self, template: &Template) -> Result<LookupResult, Error> {
         self.lookup_entity(&Entity::Template(template.clone()))
             .await
@@ -160,12 +161,11 @@ impl Storage {
         &mut self,
         statement: &Statement,
     ) -> Result<LookupResult, Error> {
-        let mut tx = self.pool.begin().await.unwrap();
         let rows: Vec<SqliteRow> =
             sqlx::query("select id,value from entity where kind=? and value like ?")
                 .bind(EntityType::Template as i64)
                 .bind(format!("{}(%", statement.name))
-                .fetch_all(&mut tx)
+                .fetch_all(&self.pool)
                 .await?;
         for row in rows {
             let id = row.get::<Id, usize>(0);
@@ -175,6 +175,10 @@ impl Storage {
             }
         }
         Err(Error::RowNotFound)
+    }
+
+    pub async fn list_templates(&self, _name: &str) -> Vec<Template> {
+        vec![]
     }
 
     pub async fn lookup_statement(&mut self, statement: &Statement) -> Result<LookupResult, Error> {
@@ -236,6 +240,25 @@ impl Storage {
                 }
                 tx.commit().await?;
                 Ok((id, true))
+            }
+        }
+    }
+
+    pub async fn lookup_statement_hashing_emails(
+        &mut self,
+        statement: &Statement,
+    ) -> Result<(LookupResult, Statement), Error> {
+        // if the statement template can't be found, retry with hashed e-mails
+        // the return value include the possibly translated statement
+        match self.lookup_statement(statement).await {
+            Ok(result) => Ok((result, statement.clone())),
+            Err(_) => {
+                let hashed_statement = statement.hash_emails();
+                let result = self.lookup_statement(&hashed_statement).await;
+                match result {
+                    Ok(result) => Ok((result, hashed_statement)),
+                    Err(e) => Err(e),
+                }
             }
         }
     }

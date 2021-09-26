@@ -34,7 +34,6 @@ fn percent_decode(s: &str) -> String {
 #[cfg(test)]
 
 mod tests {
-    use chrono::Utc;
 
     use super::*;
     use entity::Entity;
