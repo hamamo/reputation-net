@@ -21,4 +21,5 @@ libsqlite3-sys = "*"
 sqlx = { version = "*", features = ["runtime-async-std-rustls", "sqlite"] }
 percent-encoding = "*"
 nom = "6.2"
+env_logger = "*"
 log = "*"

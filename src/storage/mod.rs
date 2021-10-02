@@ -1,6 +1,5 @@
 // store entities, statements, opinions persistently
-use std::{str::FromStr};
-
+use std::str::FromStr;
 
 use libp2p::identity::Keypair;
 // library imports
@@ -105,19 +104,18 @@ impl Storage {
         let string = entity.to_string();
         let kind = entity.entity_type() as i64;
 
-        let mut tx = self.pool.begin().await.unwrap();
         let result = sqlx::query("select id from entity where kind = ? and value = ?")
             .bind(kind)
             .bind(&string)
             .map(|row: SqliteRow| -> Id { row.get::<Id, &str>("id") })
-            .fetch_optional(&mut tx)
+            .fetch_optional(&self.pool)
             .await;
         match result {
             Ok(opt) => {
                 if let Some(id) = opt {
-                    tx.rollback().await?;
                     Ok((id, false))
                 } else {
+                    let mut tx = self.pool.begin().await.unwrap();
                     sqlx::query("insert into entity(kind, value) values(?,?)")
                         .bind(kind)
                         .bind(string)
@@ -137,18 +135,39 @@ impl Storage {
     }
 
     // return the entity with the given Id
-    pub async fn get_entity(&mut self, id: Id) -> Result<Option<Entity>, Error> {
-        let mut tx = self.pool.begin().await.unwrap();
+    pub async fn get_entity(&self, id: Id) -> Result<Option<Entity>, Error> {
         let result = sqlx::query("select value from entity where id=?")
             .bind(id)
-            .fetch_optional(&mut tx)
+            .fetch_optional(&self.pool)
             .await?;
         Ok(if let Some(row) = result {
             let value = row.get::<String, usize>(0);
-            Some(Entity::from_str(&value).unwrap())
+            Some(Entity::from_str(&value).expect("parseable entity"))
         } else {
             None
         })
+    }
+
+    // return all entities with a given kind
+    pub async fn list_entities(&self, kind: EntityType) -> Result<Vec<Entity>, Error> {
+        let kind_num = kind as i32;
+        let result = sqlx::query("select value from entity where kind=?")
+            .bind(kind_num)
+            .fetch_all(&self.pool)
+            .await;
+        match result {
+            Ok(rows) => {
+                let list = rows
+                    .iter()
+                    .map(|row| {
+                        let value = row.get::<String, usize>(0);
+                        Entity::from_str(&value).expect("parseable entity")
+                    })
+                    .collect();
+                Ok(list)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     #[allow(dead_code)] // used in tests
