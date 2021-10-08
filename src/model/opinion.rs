@@ -6,52 +6,43 @@ use super::{percent_decode, percent_encode, Keypair, PublicKey, Signature, State
 
 #[derive(Clone, Debug)]
 pub struct Opinion {
-    pub statement: Statement, // the statement being asserted
-    pub date: u32,            // day since the UNIX epoch
-    pub valid: u16,           // number of days this opinion is considered valid
+    pub date: u32,       // day since the UNIX epoch
+    pub valid: u16,      // number of days this opinion is considered valid
     pub serial: u8, // to detect last opinion about a statement if more than one are made on a day
     pub certainty: i8, // positive or negative certainty in range -3..3.
     pub comment: String, // optional comment, may be empty
-    pub signature: Option<(PublicKey, Signature)>, // public key of signer and signature
+}
+
+pub struct SignedOpinion {
+    pub opinion: Opinion,
+    pub signer: PublicKey,
+    pub signature: Signature,
+}
+
+#[allow(dead_code)]
+pub struct SignedStatement {
+    pub statement: Statement,
+    pub opinions: Vec<SignedOpinion>,
 }
 
 impl Opinion {
     #[allow(dead_code)]
-    pub fn sign_using(&self, keypair: Keypair) -> Self {
+    pub fn sign_using(&self, statement_bytes: &Vec<u8>, keypair: Keypair) -> SignedOpinion {
         // return a signed version. If original is already signed, strip signature first
 
-        let mut result = self.clone();
-        let signature = (
-            PublicKey {
+        SignedOpinion {
+            opinion: self.clone(),
+            signer: PublicKey {
                 key: keypair.public(),
             },
-            keypair.sign(&self.signable_bytes()).unwrap(),
-        );
-        result.signature = Some(signature);
-        result
-    }
-
-    fn strip_signature(&self) -> Self {
-        let mut result = self.clone();
-        result.signature = None;
-        result
-    }
-
-    #[allow(dead_code)]
-    pub fn is_signature_ok(&self) -> bool {
-        if let Some((signer, signature)) = &self.signature {
-            signer.key.verify(&self.signable_bytes(), signature)
-        } else {
-            false
+            signature: keypair.sign(&self.signable_bytes(statement_bytes)).unwrap(),
         }
     }
 
-    fn signable_bytes(&self) -> Vec<u8> {
-        if self.signature.is_some() {
-            self.strip_signature().signable_bytes()
-        } else {
-            self.to_string().as_bytes().to_vec()
-        }
+    fn signable_bytes(&self, statement_bytes: &Vec<u8>) -> Vec<u8> {
+        let mut bytes = self.to_string().as_bytes().to_vec();
+        bytes.extend(statement_bytes);
+        bytes
     }
 }
 
@@ -59,17 +50,13 @@ impl Display for Opinion {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
-            "{};{};{};{};{};{}",
-            self.statement.to_string(),
+            "{};{};{};{};{}",
             self.date,
             self.valid,
             self.serial,
             self.certainty,
             percent_encode(&self.comment),
         )?;
-        if let Some((pubkey, sig)) = &self.signature {
-            write!(f, ";{};{}", pubkey.to_string(), base64::encode(sig))?;
-        }
         Ok(())
     }
 }
@@ -86,18 +73,27 @@ impl FromStr for Opinion {
     type Err = InvalidOpinion;
     fn from_str(s: &str) -> Result<Self, InvalidOpinion> {
         let parts: Vec<&str> = s.split(";").collect();
-        let mut result = Self {
-            statement: parts[0].parse().unwrap(),
-            date: parts[1].parse().unwrap(),
-            valid: parts[2].parse().unwrap(),
-            serial: parts[3].parse().unwrap(),
-            certainty: parts[4].parse().unwrap(),
-            comment: percent_decode(parts[5]),
-            signature: None,
+        let result = Self {
+            date: parts[0].parse().unwrap(),
+            valid: parts[1].parse().unwrap(),
+            serial: parts[2].parse().unwrap(),
+            certainty: parts[3].parse().unwrap(),
+            comment: percent_decode(parts[4]),
         };
-        if parts.len() >= 8 {
-            result.signature = Some((parts[6].parse().unwrap(), base64::decode(parts[7]).unwrap()))
-        }
         Ok(result)
+    }
+}
+
+impl SignedOpinion {
+    #[allow(dead_code)]
+    pub fn verify_signature(&self, statement_bytes: &Vec<u8>) -> bool {
+        let signable_bytes = self.opinion.signable_bytes(statement_bytes);
+        self.signer.key.verify(&signable_bytes, &self.signature)
+    }
+}
+
+impl Display for SignedOpinion {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{};{};{}", self.opinion, self.signer, base64::encode(&self.signature))
     }
 }

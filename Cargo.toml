@@ -14,12 +14,11 @@ cidr = "*"
 sha2 = "*"
 chrono = "*"
 base64 = "*"
-ascii85 = "*"
 async-std = { version = "*", features = ["attributes"] }
 once_cell = "*"
 libsqlite3-sys = "*"
 sqlx = { version = "*", features = ["runtime-async-std-rustls", "sqlite"] }
 percent-encoding = "*"
-nom = "6.2"
+nom = "7.0"
 env_logger = "*"
 log = "*"

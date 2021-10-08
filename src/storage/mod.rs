@@ -150,9 +150,8 @@ impl Storage {
 
     // return all entities with a given kind
     pub async fn list_entities(&self, kind: EntityType) -> Result<Vec<Entity>, Error> {
-        let kind_num = kind as i32;
         let result = sqlx::query("select value from entity where kind=?")
-            .bind(kind_num)
+            .bind(kind as i64)
             .fetch_all(&self.pool)
             .await;
         match result {

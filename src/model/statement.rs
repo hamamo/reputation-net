@@ -50,9 +50,14 @@ impl Statement {
             entities: self.entities.iter().map(|e| e.hash_emails()).collect()
         }
     }
+
+    #[allow(dead_code)]
+    // return a byte vector for signing
+    pub fn signable_bytes(&self) -> Vec<u8> {
+        self.to_string().as_bytes().to_vec()
+    }
 }
 
-// within Statements (and following, within Opinions), entities are percent-encoded to simplify parsing
 impl Display for Statement {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}(", self.name)?;
@@ -83,6 +88,15 @@ impl FromStr for Statement {
         match all_consuming(parser::statement)(s) {
             Ok((_, stmt)) => Ok(stmt),
             _ => Err(InvalidStatement),
+        }
+    }
+}
+
+impl From<&str> for Statement {
+    fn from(s: &str) -> Self {
+        match all_consuming(parser::statement)(s) {
+            Ok((_, stmt)) => stmt,
+            _ => panic!("expected a statement"),
         }
     }
 }

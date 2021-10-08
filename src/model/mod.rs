@@ -40,51 +40,38 @@ mod tests {
     use opinion::Opinion;
 
     // a DER key created by me. This should be considered public knowledge now, never trust that key
-    const KEY_BASE64: &str =
-        "MHQCAQEEIJjTd4ks9PIRt4pFOGdhUYnKIkDrep7mkI7Se8QII8xToAcGBSuBBAAKoUQDQgAEwIfR\
-         9vu28FoqiEzu9iADY6gqnQfP8q9WzAcLQ0kwfVz5dnEOHKssuQV+DFHlHM33CHr8uPAShT7uazCf\
-         H6poUw==";
+    fn keypair() -> Keypair {
+        let mut der_bytes = base64::decode(
+            "MHQCAQEEIJjTd4ks9PIRt4pFOGdhUYnKIkDrep7mkI7Se8QII8xToAcGBSuBBAAKoUQDQgAEwIfR\
+            9vu28FoqiEzu9iADY6gqnQfP8q9WzAcLQ0kwfVz5dnEOHKssuQV+DFHlHM33CHr8uPAShT7uazCf\
+            H6poUw==",
+        )
+        .unwrap();
+        Keypair::secp256k1_from_der(&mut der_bytes).unwrap()
+    }
 
     fn test_signer() -> Entity {
-        let mut der_bytes = base64::decode(KEY_BASE64).unwrap();
-        let keypair = Keypair::secp256k1_from_der(&mut der_bytes).unwrap();
+        let keypair = keypair();
         let pk = keypair.public();
         Entity::Signer(PublicKey { key: pk })
     }
 
     #[test]
     fn signing() {
-        let mut der_bytes = base64::decode(KEY_BASE64).unwrap();
-        let keypair = Keypair::secp256k1_from_der(&mut der_bytes).unwrap();
+        let keypair = keypair();
+        let statement: Statement = "abuse_contact(example.com,abuse@example.com)".into();
+        let statement_bytes = statement.signable_bytes();
         let opinion = Opinion {
-            statement: Statement::new(
-                "abuse_contact",
-                vec![
-                    Entity::Domain("example.com".into()),
-                    Entity::EMail("abuse@example.com".into()),
-                ],
-            ),
             date: 12345 as u32, /* constant value to make unit test possible */
             valid: 365,
             serial: 0,
             certainty: 3,
             comment: "as per whois info".to_string(),
-            signature: None,
         };
-        // print unsigned opinion
-        assert_eq!(
-            opinion.to_string(),
-            "abuse_contact(example.com,abuse@example.com);12345;365;0;3;as%20per%20whois%20info"
-        );
-        let opinion = opinion.sign_using(keypair);
-        // print signed opinion
-        let opinion_string = opinion.to_string();
-        assert_eq!(opinion.to_string(), "abuse_contact(example.com,abuse@example.com);12345;365;0;3;as%20per%20whois%20info;secp256k1:A8CH0fb7tvBaKohM7vYgA2OoKp0Hz/KvVswHC0NJMH1c;MEUCIQDR1vz5mbXsqh7q/0ktW+WIpmekDdZ9m2nfa5UvSt0GNgIgL5sHzi2vkIu7OAMzX2AzRUAfe+cy8glF87TYbE8cMB8=");
-        // decode from string
-        let decoded: Opinion = opinion_string.parse().unwrap();
-        println!("{:?}", decoded);
-        let sig_ok = decoded.is_signature_ok();
-        println!("Signature is {}", if sig_ok { "ok" } else { "not ok" });
+        assert_eq!(opinion.to_string(), "12345;365;0;3;as%20per%20whois%20info");
+        let signed_opinion = opinion.sign_using(&statement_bytes, keypair);
+        assert_eq!(signed_opinion.to_string(), "12345;365;0;3;as%20per%20whois%20info;secp256k1:A8CH0fb7tvBaKohM7vYgA2OoKp0Hz/KvVswHC0NJMH1c;MEUCIQCE7gA9qEoyMo9anCYdR0FvIvnpwVdhml8A26ohUYCC3QIgfp6NpND0EShCzXLUaRSQ/DRriFlXbQLeyI/8HRBK5Mo=");
+        assert!(signed_opinion.verify_signature(&statement_bytes));
     }
 
     #[test]
