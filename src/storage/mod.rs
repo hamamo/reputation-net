@@ -70,6 +70,7 @@ impl Storage {
                 date integer not null,
                 valid integer not null,
                 certainty integer not null,
+                signature text,
                 foreign key(statement_id) references statement(id),
                 foreign key(signer_id) references entity(id)
             )",

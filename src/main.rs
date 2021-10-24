@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
     let local_key = identity::Keypair::generate_ed25519();
     let local_peer_id = PeerId::from(local_key.public());
-    info!("Local peer id: {:?}", local_peer_id);
+    println!("Local peer id: {:?}", local_peer_id);
     let (mut input_sender, mut input_receiver) = mpsc::channel::<String>(3);
     let (event_sender, mut event_receiver) = mpsc::channel::<Event>(100);
 
@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     loop {
         select! {
             event = swarm.next() => {
-                debug!("swarm event: {:?}", event);
+                info!("swarm event: {:?}", event);
             },
             event = input_receiver.next() => {
                 match event {

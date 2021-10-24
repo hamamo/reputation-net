@@ -128,8 +128,8 @@ impl ReputationNet {
             .gossipsub
             .publish(self.as_topic(&statement.name), statement.to_string())
         {
-            Ok(_mid) => println!("published ok"),
-            Err(err) => println!("could not publish: {:?}", err),
+            Ok(_mid) => info!("published ok"),
+            Err(err) => error!("could not publish: {:?}", err),
         };
     }
 
@@ -139,7 +139,7 @@ impl ReputationNet {
             Event::NewStatement(statement, _peer) => {
                 match self.storage.lookup_statement(&statement).await {
                     Ok((id, inserted)) => {
-                        println!(
+                        info!(
                             "{} statement {} has id {}",
                             if inserted {
                                 "newly created"
@@ -157,7 +157,7 @@ impl ReputationNet {
                             };
                         }
                     }
-                    Err(e) => println!("No matching template for {}: {:?}", statement, e),
+                    Err(e) => error!("No matching template for {}: {:?}", statement, e),
                 }
             }
             Event::TemplateRequest(_peer) => {
