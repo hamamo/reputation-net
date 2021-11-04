@@ -15,7 +15,7 @@ pub enum EntityType {
     Signer = 2,
     Domain = 3,
     EMail = 4,
-    HashedEMail = 5,
+    HashValue = 5,
     AS = 6,
     IPv4 = 7,
     IPv6 = 8,
@@ -35,7 +35,7 @@ impl Display for EntityType {
                 Self::IPv6 => "IPv6",
                 Self::Signer => "Signer",
                 Self::Url => "Url",
-                Self::HashedEMail => "HashedEMail",
+                Self::HashValue => "HashValue",
                 Self::Template => "Template",
             }
         )
@@ -60,7 +60,7 @@ impl FromStr for EntityType {
             "IPv4" => Self::IPv4,
             "IPv6" => Self::IPv6,
             "Signer" => Self::Signer,
-            "HashedEMail" => Self::HashedEMail,
+            "HashValue" => Self::HashValue,
             "Template" => Self::Template,
             _ => return Err(InvalidEntityType),
         };
@@ -78,7 +78,7 @@ pub enum Entity {
     Signer(PublicKey),   // denotes a signer
     #[allow(dead_code)]
     Url(String),         // denotes an URL, for example a contact form
-    HashedEMail(String), // hash of an e-mail, to protect personal data
+    HashValue(String),   // hash of an e-mail or other data. may be used to cloak user data, or to secure URL contents
     Template(Template),  // statement template to dynamically add new statement types
 }
 
@@ -93,9 +93,9 @@ impl Display for InvalidEntity {
 
 impl Entity {
     #[allow(dead_code)]
-    pub fn hashed_email_for(email: &str) -> Self {
-        let digest = Sha2_256::digest(email.as_bytes());
-        Self::HashedEMail(base64::encode(digest))
+    pub fn hash_string(string: &str) -> Self {
+        let digest = Sha2_256::digest(string.as_bytes());
+        Self::HashValue(base64::encode(digest))
     }
 
     pub fn entity_type(&self) -> EntityType {
@@ -107,14 +107,14 @@ impl Entity {
             Self::IPv6(_) => EntityType::IPv6,
             Self::Signer(_) => EntityType::Signer,
             Self::Url(_) => EntityType::Url,
-            Self::HashedEMail(_) => EntityType::HashedEMail,
+            Self::HashValue(_) => EntityType::HashValue,
             Self::Template(_) => EntityType::Template,
         }
     }
 
     pub fn hash_emails(&self) -> Self {
         match self {
-            Self::EMail(x) => Self::hashed_email_for(x),
+            Self::EMail(x) => Self::hash_string(x),
             _ => self.clone()
         }
     }
@@ -130,7 +130,7 @@ impl Display for Entity {
             Entity::IPv6(ip) => write!(f, "{}", ip),
             Entity::Signer(pk) => write!(f, "{}", pk),
             Entity::Url(s) => write!(f, "{}", s),
-            Entity::HashedEMail(s) => write!(f, "@#{}", s),
+            Entity::HashValue(s) => write!(f, "#{}", s),
             Entity::Template(t) => write!(f, "{}", t),
         }
     }
@@ -195,7 +195,7 @@ mod tests {
             "IPv4",
             "IPv6",
             "Signer",
-            "HashedEMail",
+            "HashValue",
             "Template",
         ] {
             assert_eq!(
@@ -203,5 +203,16 @@ mod tests {
                 format!("{}", EntityType::from_str(type_str).unwrap())
             )
         }
+    }
+
+    #[test]
+    fn signer_display() {
+        let keypair = super::super::tests::example_keypair();
+        let pk = keypair.public();
+        let signer = Entity::Signer(super::super::publickey::PublicKey { key: pk });
+        assert_eq!(
+            signer.to_string(),
+            super::super::tests::example_signer()
+        );
     }
 }

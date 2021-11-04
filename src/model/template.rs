@@ -73,13 +73,13 @@ fn from_str() {
 
 #[test]
 fn from_str_spammer() {
-    let input = "spammer(HashedEMail|IPv4|IPv6)";
+    let input = "spammer(HashValue|IPv4|IPv6)";
     let template: Template = Template::from_str(input).unwrap();
     assert_eq!(template.name, "spammer");
     assert_eq!(
         template.entity_types,
         vec![vec![
-            EntityType::HashedEMail,
+            EntityType::HashValue,
             EntityType::IPv4,
             EntityType::IPv6
         ]]

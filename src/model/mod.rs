@@ -10,7 +10,7 @@ mod statement;
 mod template;
 mod trust;
 pub use entity::{Entity, EntityType};
-pub use opinion::Opinion;
+pub use opinion::{Opinion,SignedOpinion,SignedStatement,today};
 pub use publickey::{PublicKey, Signature};
 pub use statement::Statement;
 pub use template::Template;
@@ -33,14 +33,12 @@ fn percent_decode(s: &str) -> String {
 
 #[cfg(test)]
 
-mod tests {
+pub mod tests {
 
     use super::*;
-    use entity::Entity;
-    use opinion::Opinion;
 
     // a DER key created by me. This should be considered public knowledge now, never trust that key
-    fn keypair() -> Keypair {
+    pub fn example_keypair() -> Keypair {
         let mut der_bytes = base64::decode(
             "MHQCAQEEIJjTd4ks9PIRt4pFOGdhUYnKIkDrep7mkI7Se8QII8xToAcGBSuBBAAKoUQDQgAEwIfR\
             9vu28FoqiEzu9iADY6gqnQfP8q9WzAcLQ0kwfVz5dnEOHKssuQV+DFHlHM33CHr8uPAShT7uazCf\
@@ -50,36 +48,8 @@ mod tests {
         Keypair::secp256k1_from_der(&mut der_bytes).unwrap()
     }
 
-    fn test_signer() -> Entity {
-        let keypair = keypair();
-        let pk = keypair.public();
-        Entity::Signer(PublicKey { key: pk })
-    }
-
-    #[test]
-    fn signing() {
-        let keypair = keypair();
-        let statement: Statement = "abuse_contact(example.com,abuse@example.com)".into();
-        let statement_bytes = statement.signable_bytes();
-        let opinion = Opinion {
-            date: 12345 as u32, /* constant value to make unit test possible */
-            valid: 365,
-            serial: 0,
-            certainty: 3,
-            comment: "as per whois info".to_string(),
-        };
-        assert_eq!(opinion.to_string(), "12345;365;0;3;as%20per%20whois%20info");
-        let signed_opinion = opinion.sign_using(&statement_bytes, keypair);
-        assert_eq!(signed_opinion.to_string(), "12345;365;0;3;as%20per%20whois%20info;secp256k1:A8CH0fb7tvBaKohM7vYgA2OoKp0Hz/KvVswHC0NJMH1c;MEUCIQCE7gA9qEoyMo9anCYdR0FvIvnpwVdhml8A26ohUYCC3QIgfp6NpND0EShCzXLUaRSQ/DRriFlXbQLeyI/8HRBK5Mo=");
-        assert!(signed_opinion.verify_signature(&statement_bytes));
-    }
-
-    #[test]
-    fn signer_display() {
-        let signer = test_signer();
-        assert_eq!(
-            signer.to_string(),
-            "secp256k1:A8CH0fb7tvBaKohM7vYgA2OoKp0Hz/KvVswHC0NJMH1c"
-        );
+    // signer (public key with algorithm prefix) for the DER key above
+    pub fn example_signer() -> String {
+        "secp256k1:A8CH0fb7tvBaKohM7vYgA2OoKp0Hz/KvVswHC0NJMH1c".to_string()
     }
 }

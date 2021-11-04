@@ -14,7 +14,7 @@ use nom::{
 };
 use std::str::FromStr;
 
-use super::{Entity, EntityType, Statement, Template, PublicKey};
+use super::{Entity, EntityType, PublicKey, Statement, Template};
 
 // nom parser utilities
 fn entity_type(i: &str) -> nom::IResult<&str, EntityType> {
@@ -39,8 +39,8 @@ fn entity_type(i: &str) -> nom::IResult<&str, EntityType> {
     if let Ok((rest, _)) = nom::bytes::complete::tag::<&str, &str, Error<&str>>("Url")(i) {
         return Ok((rest, EntityType::Url));
     }
-    if let Ok((rest, _)) = nom::bytes::complete::tag::<&str, &str, Error<&str>>("HashedEMail")(i) {
-        return Ok((rest, EntityType::HashedEMail));
+    if let Ok((rest, _)) = nom::bytes::complete::tag::<&str, &str, Error<&str>>("HashValue")(i) {
+        return Ok((rest, EntityType::HashValue));
     }
     match nom::bytes::complete::tag("Template")(i) {
         Ok((rest, _)) => Ok((rest, EntityType::Template)),
@@ -98,11 +98,11 @@ fn base64(i: &str) -> IResult<&str, &str> {
 }
 
 // a hashed email address - can be either raw input or already hashed base64
-fn hashed_email(i: &str) -> IResult<&str, Entity> {
-    let (i, _) = tag("@#")(i)?;
+fn hash_value(i: &str) -> IResult<&str, Entity> {
+    let (i, _) = tag("#")(i)?;
     alt((
-        map(recognize(email), |s| Entity::hashed_email_for(s)),
-        map(base64, |s| Entity::HashedEMail(s.into())),
+        map(recognize(email), |s| Entity::hash_string(s)),
+        map(base64, |s| Entity::HashValue(s.into())),
     ))(i)
 }
 
@@ -163,21 +163,12 @@ pub fn template(i: &str) -> IResult<&str, Entity> {
 
 pub fn signer(i: &str) -> IResult<&str, Entity> {
     map(recognize(tuple((tag("secp256k1:"), base64))), |s| {
-       Entity::Signer(PublicKey::from_str(&s).expect("public key"))
+        Entity::Signer(PublicKey::from_str(&s).expect("public key"))
     })(i)
 }
 
 pub fn entity(i: &str) -> IResult<&str, Entity> {
-    alt((
-        email,
-        hashed_email,
-        template,
-        asn,
-        ipv4,
-        ipv6,
-        domain,
-        signer,
-    ))(i)
+    alt((email, hash_value, template, asn, ipv4, ipv6, domain, signer))(i)
 }
 
 pub fn statement(i: &str) -> IResult<&str, Statement> {
@@ -217,15 +208,15 @@ mod tests {
     }
     #[test]
     fn hashed_email() {
-        let entity = Entity::HashedEMail("tMmiiTI7IaAcPpQPFQ65uMVCWH8av9jw4cwf/F5HVRQ=".into());
+        let entity = Entity::HashValue("tMmiiTI7IaAcPpQPFQ65uMVCWH8av9jw4cwf/F5HVRQ=".into());
         assert_eq!(
             ("", entity.clone()),
-            super::hashed_email("@#user@example.com").unwrap()
+            super::hash_value("#user@example.com").unwrap()
         );
 
         assert_eq!(
             (",", entity),
-            super::hashed_email("@#user@example.com,").unwrap()
+            super::hash_value("#user@example.com,").unwrap()
         );
     }
     #[test]

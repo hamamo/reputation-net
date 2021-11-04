@@ -12,7 +12,7 @@ libp2p = "0.39"
 futures = "*"
 cidr = "*"
 sha2 = "*"
-chrono = "*"
+chrono = { version = "*", features = ["clock"] }
 base64 = "*"
 async-std = { version = "*", features = ["attributes"] }
 once_cell = "*"

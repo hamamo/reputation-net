@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     loop {
         select! {
             event = swarm.next() => {
-                info!("swarm event: {:?}", event);
+                debug!("swarm event: {:?}", event);
             },
             event = input_receiver.next() => {
                 match event {

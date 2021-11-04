@@ -21,15 +21,13 @@ use libp2p::{
     NetworkBehaviour, PeerId,
 };
 
-use crate::model::{Entity, EntityType};
-
-use super::model::Statement;
-use super::storage::Storage;
+use super::model::{today, Entity, EntityType, Opinion, SignedStatement, Statement};
+use super::storage::{Id, Storage};
 
 #[derive(Debug)]
 pub enum Event {
-    NewStatement(Statement, Option<PeerId>),
-    TemplateRequest(Option<PeerId>)
+    NewStatement(SignedStatement, Option<PeerId>),
+    TemplateRequest(Option<PeerId>),
 }
 
 #[derive(NetworkBehaviour)]
@@ -89,27 +87,27 @@ impl ReputationNet {
     }
 
     pub async fn handle_input(&mut self, what: &str) {
-        /* for now, interpret input lines as entities and store them */
+        /* for now, create opinions with default values. I don't know yet how the UI should look finally */
 
         match what.parse() {
             Ok(statement) => match self
                 .storage
-                .lookup_statement_hashing_emails(&statement)
+                .persist_statement_hashing_emails(&statement)
                 .await
             {
-                Ok(((id, inserted), actual_statement)) => {
+                Ok((persist_result, actual_statement)) => {
                     println!(
                         "{} statement {} has id {}",
-                        if inserted {
-                            "newly created"
-                        } else {
-                            "previously existing"
-                        },
+                        persist_result.wording(),
                         actual_statement,
-                        id
+                        persist_result.id
                     );
+                    let signed_statement = self
+                        .sign_statement(actual_statement, persist_result.id)
+                        .await
+                        .unwrap();
                     // we ignore the possible error when no peers are currently connected
-                    self.publish_statement(&actual_statement).await;
+                    self.publish_statement(&signed_statement).await;
                 }
                 Err(_e) => {
                     println!("No matching template: {}", statement.minimal_template());
@@ -123,11 +121,39 @@ impl ReputationNet {
         };
     }
 
-    pub async fn publish_statement(&mut self, statement: &Statement) {
-        match self
-            .gossipsub
-            .publish(self.as_topic(&statement.name), statement.to_string())
-        {
+    pub async fn sign_statement(
+        &mut self,
+        statement: Statement,
+        statement_id: Id,
+    ) -> Option<SignedStatement> {
+        let opinion = Opinion {
+            date: today(),
+            valid: 30,
+            serial: 0,
+            certainty: 3,
+            comment: "".into(),
+        };
+        let trust = self.storage.owner_trust().await.unwrap();
+        if let Some(keypair) = trust.key {
+            let signed_opinion = opinion.sign_using(&statement.signable_bytes(), &keypair);
+            self.storage
+                .persist_opinion(&signed_opinion, statement_id)
+                .await
+                .unwrap();
+            Some(SignedStatement {
+                statement: statement,
+                opinions: vec![signed_opinion],
+            })
+        } else {
+            None
+        }
+    }
+
+    pub async fn publish_statement(&mut self, signed_statement: &SignedStatement) {
+        match self.gossipsub.publish(
+            self.as_topic(&signed_statement.statement.name),
+            signed_statement.to_string(),
+        ) {
             Ok(_mid) => info!("published ok"),
             Err(err) => error!("could not publish: {:?}", err),
         };
@@ -136,20 +162,30 @@ impl ReputationNet {
     pub async fn handle_event(&mut self, event: &Event) {
         debug!("got event: {:?}", event);
         match event {
-            Event::NewStatement(statement, _peer) => {
-                match self.storage.lookup_statement(&statement).await {
-                    Ok((id, inserted)) => {
+            Event::NewStatement(signed_statement, _peer) => {
+                let statement = &signed_statement.statement;
+                match self.storage.persist_statement(statement).await {
+                    Ok(persist_result) => {
                         info!(
                             "{} statement {} has id {}",
-                            if inserted {
-                                "newly created"
-                            } else {
-                                "previously existing"
-                            },
-                            &statement,
-                            &id
+                            persist_result.wording(),
+                            statement,
+                            persist_result.id
                         );
-                        if inserted && statement.name == "template" {
+                        for signed_opinion in &signed_statement.opinions {
+                            let result = self
+                                .storage
+                                .persist_opinion(signed_opinion, persist_result.id)
+                                .await
+                                .expect("could insert opinion");
+                            info!(
+                                "{} opinion {} has id {}",
+                                result.wording(),
+                                signed_opinion,
+                                result.id
+                            );
+                        }
+                        if persist_result.is_new() && statement.name == "template" {
                             if let Entity::Template(template) = &statement.entities[0] {
                                 self.gossipsub
                                     .subscribe(&self.as_topic(&template.name))
@@ -161,13 +197,29 @@ impl ReputationNet {
                 }
             }
             Event::TemplateRequest(_peer) => {
-                let entities = self.storage.list_entities(EntityType::Template).await.unwrap();
+                let entities = self
+                    .storage
+                    .list_entities(EntityType::Template)
+                    .await
+                    .unwrap();
                 for entity in entities {
-                    self.publish_statement(&Statement {
+                    let statement = Statement {
                         name: "template".into(),
                         entities: vec![entity],
-                    }).await
-                };
+                    };
+                    let opinion = Opinion::default();
+                    if let Ok(trust) = self.storage.owner_trust().await {
+                        if let Some(keypair) = trust.key {
+                            let signed_statement = SignedStatement {
+                                opinions: vec![
+                                    opinion.sign_using(&statement.signable_bytes(), &keypair)
+                                ],
+                                statement: statement,
+                            };
+                            self.publish_statement(&signed_statement).await;
+                        }
+                    }
+                }
             }
         }
     }
@@ -176,7 +228,7 @@ impl ReputationNet {
 impl NetworkBehaviourEventProcess<GossipsubEvent> for ReputationNet {
     // Called when `Gossipsub` produces an event.
     fn inject_event(&mut self, event: GossipsubEvent) {
-        info!("Gossipsub event: {:?}", event);
+        debug!("Gossipsub event: {:?}", event);
         match event {
             GossipsubEvent::Message {
                 propagation_source,
@@ -184,16 +236,16 @@ impl NetworkBehaviourEventProcess<GossipsubEvent> for ReputationNet {
                 message,
             } => {
                 let string = String::from_utf8_lossy(&message.data);
-                match string.parse::<Statement>() {
-                    Ok(statement) => {
-                        info!(
+                match string.parse::<SignedStatement>() {
+                    Ok(signed_statement) => {
+                        debug!(
                             "Received: {} from {:?}, id {:?}",
-                            statement, propagation_source, message_id
+                            signed_statement, propagation_source, message_id
                         );
-                        match self
-                            .event_sender
-                            .try_send(Event::NewStatement(statement, message.source.clone()))
-                        {
+                        match self.event_sender.try_send(Event::NewStatement(
+                            signed_statement,
+                            message.source.clone(),
+                        )) {
                             Err(e) => error!("could not send event: {:?}", e),
                             _ => (),
                         }
@@ -205,8 +257,10 @@ impl NetworkBehaviourEventProcess<GossipsubEvent> for ReputationNet {
             }
             GossipsubEvent::Subscribed { peer_id, topic } => {
                 if topic.as_str() == "template" {
-                    info!("peer {} wants topics, using broadcast for now", peer_id);
-                    self.event_sender.try_send(Event::TemplateRequest(Some(peer_id))).unwrap();
+                    debug!("peer {} wants topics, using broadcast for now", peer_id);
+                    self.event_sender
+                        .try_send(Event::TemplateRequest(Some(peer_id)))
+                        .unwrap();
                 }
             }
             _ => (),
@@ -217,7 +271,7 @@ impl NetworkBehaviourEventProcess<GossipsubEvent> for ReputationNet {
 impl NetworkBehaviourEventProcess<MdnsEvent> for ReputationNet {
     // Called when `mdns` produces an event.
     fn inject_event(&mut self, event: MdnsEvent) {
-        info!("mdns event: {:?}", event);
+        debug!("mdns event: {:?}", event);
         match event {
             MdnsEvent::Discovered(list) => {
                 for (peer, _addr) in list {
@@ -236,7 +290,7 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for ReputationNet {
 }
 
 impl NetworkBehaviourEventProcess<PingEvent> for ReputationNet {
-    fn inject_event(&mut self, _event: PingEvent) {
-        // info!("ping event: {:?}", event);
+    fn inject_event(&mut self, event: PingEvent) {
+        debug!("ping event: {:?}", event);
     }
 }

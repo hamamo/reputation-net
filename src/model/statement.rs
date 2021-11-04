@@ -23,12 +23,16 @@ impl Statement {
     }
 
     pub fn minimal_template(&self) -> Template {
-        Template{
+        Template {
             name: self.name.clone(),
-            entity_types: self.entities.iter().map(|x| vec![x.entity_type()]).collect()
+            entity_types: self
+                .entities
+                .iter()
+                .map(|x| vec![x.entity_type()])
+                .collect(),
         }
     }
-    
+
     pub fn matches_template(&self, template: &Template) -> bool {
         self.name == template.name && {
             for (entity, entity_type_list) in self.entities.iter().zip(template.entity_types.iter())
@@ -45,9 +49,9 @@ impl Statement {
     // create a version of self where literal e-mail addresses are replaced by hashed e-mail addresses
     // hash function is SHA256
     pub fn hash_emails(&self) -> Self {
-        Self{
+        Self {
             name: self.name.clone(),
-            entities: self.entities.iter().map(|e| e.hash_emails()).collect()
+            entities: self.entities.iter().map(|e| e.hash_emails()).collect(),
         }
     }
 
@@ -102,15 +106,24 @@ impl From<&str> for Statement {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{Statement,Template};
+pub mod tests {
+    use super::*;
     use std::str::FromStr;
 
+    pub fn example() -> Statement {
+        Statement {
+            name: "abuse".into(),
+            entities: vec![
+                Entity::Domain("example.com".into()),
+                Entity::EMail("abuse@example.com".into()),
+            ],
+        }
+    }
+
     #[test]
-    fn statement() {
+    fn print() {
         let stmt_src = "abuse(example.com,abuse@example.com)";
-        let stmt = Statement::from_str(stmt_src).unwrap();
-        println!("{}", stmt);
+        let stmt = example();
         assert_eq!(stmt_src, stmt.to_string());
     }
 
