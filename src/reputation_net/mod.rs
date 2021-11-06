@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use futures::channel::mpsc::Sender;
 
+use libp2p::request_response::{ProtocolSupport, RequestResponseMessage};
 use log::{debug, error, info};
 
 #[allow(unused_imports)]
@@ -14,6 +15,9 @@ use libp2p::{
     identity::Keypair,
     mdns::{Mdns, MdnsConfig, MdnsEvent},
     ping::{Ping, PingConfig, PingEvent},
+    request_response::{
+        RequestResponse, RequestResponseCodec, RequestResponseConfig, RequestResponseEvent,
+    },
     swarm::{
         IntoProtocolsHandler, NetworkBehaviourAction, NetworkBehaviourEventProcess, PollParameters,
         ProtocolsHandler, SwarmEvent,
@@ -24,10 +28,16 @@ use libp2p::{
 use super::model::{today, Entity, EntityType, Opinion, SignedStatement, Statement};
 use super::storage::{Id, Storage};
 
+mod requestresponse;
+mod rpc;
+use requestresponse::*;
+use rpc::*;
+
 #[derive(Debug)]
 pub enum Event {
     NewStatement(SignedStatement, Option<PeerId>),
     TemplateRequest(Option<PeerId>),
+    SayHello(PeerId),
 }
 
 #[derive(NetworkBehaviour)]
@@ -35,6 +45,7 @@ pub struct ReputationNet {
     mdns: Mdns,
     gossipsub: Gossipsub,
     ping: Ping,
+    rpc: RequestResponse<RpcCodec>,
 
     #[behaviour(ignore)]
     storage: Storage,
@@ -45,7 +56,9 @@ pub struct ReputationNet {
 impl ReputationNet {
     #[allow(unused_variables)]
     pub async fn new(local_peer_id: PeerId, event_sender: Sender<Event>) -> Self {
-        let keypair = Keypair::generate_ed25519();
+        let storage = Storage::new().await;
+        let keypair = storage.owner_trust().await.expect("could get owner trust").key.expect("owner trust has private key");
+        let local_peer_id = PeerId::from(keypair.public());
         #[allow(unused_mut)]
         let mut repnet = Self {
             gossipsub: Gossipsub::new(
@@ -55,10 +68,15 @@ impl ReputationNet {
             .unwrap(),
             mdns: Mdns::new(MdnsConfig::default()).await.unwrap(),
             ping: Ping::new(PingConfig::new()),
-            storage: Storage::new().await,
+            rpc: RequestResponse::new(
+                RpcCodec {},
+                vec![(RpcProtocol::Version1, ProtocolSupport::Full)].into_iter(),
+                RequestResponseConfig::default(),
+            ),
+            storage: storage,
             event_sender: event_sender,
         };
-        for t in &repnet.topics().await {
+        for t in repnet.topics().await {
             repnet
                 .gossipsub
                 .subscribe(&IdentTopic::new(t))
@@ -221,6 +239,10 @@ impl ReputationNet {
                     }
                 }
             }
+            Event::SayHello(peer) => {
+                self.rpc
+                    .send_request(peer, RpcRequestResponse::Hello("good morning!".into()));
+            }
         }
     }
 }
@@ -274,8 +296,16 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for ReputationNet {
         debug!("mdns event: {:?}", event);
         match event {
             MdnsEvent::Discovered(list) => {
-                for (peer, _addr) in list {
+                let mut peers = HashSet::new();
+                for (peer, address) in list {
+                    self.rpc.add_address(&peer, address);
+                    peers.insert(peer);
+                }
+                for peer in peers {
                     self.gossipsub.add_explicit_peer(&peer);
+                    self.event_sender
+                        .try_send(Event::SayHello(peer))
+                        .expect("could send greeting");
                 }
             }
             MdnsEvent::Expired(list) => {
@@ -292,5 +322,30 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for ReputationNet {
 impl NetworkBehaviourEventProcess<PingEvent> for ReputationNet {
     fn inject_event(&mut self, event: PingEvent) {
         debug!("ping event: {:?}", event);
+    }
+}
+
+impl NetworkBehaviourEventProcess<RequestResponseEvent<RpcRequestResponse, RpcRequestResponse>>
+    for ReputationNet
+{
+    fn inject_event(
+        &mut self,
+        event: RequestResponseEvent<RpcRequestResponse, RpcRequestResponse>,
+    ) {
+        println!("rpc event: {:?}", event);
+        match event {
+            RequestResponseEvent::Message { peer: _, message } => match message {
+                RequestResponseMessage::Request {
+                    request_id: _,
+                    request: _,
+                    channel,
+                } => {
+                    let response = RpcRequestResponse::Hello("Hi!".into());
+                    self.rpc.send_response(channel, response).unwrap()
+                }
+                _ => (),
+            },
+            _ => (),
+        }
     }
 }

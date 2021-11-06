@@ -4,7 +4,7 @@ use std::str::FromStr;
 
 use super::parser;
 
-use super::entity::{Entity,EntityType};
+use super::entity::{Entity, EntityType};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Template {
@@ -53,35 +53,40 @@ impl FromStr for Template {
     }
 }
 
-#[test]
-fn display() {
-    let template = Template {
-        name: "template".into(),
-        entity_types: vec![vec![EntityType::Template]],
-    };
-    assert_eq!(template.to_string(), "template(Template)");
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[test]
-fn from_str() {
-    let template = Template {
-        name: "template".into(),
-        entity_types: vec![vec![EntityType::Template]],
-    };
-    assert_eq!(template, Template::from_str("template(Template)").unwrap())
-}
+    #[test]
+    fn display() {
+        let template = Template {
+            name: "template".into(),
+            entity_types: vec![vec![EntityType::Template]],
+        };
+        assert_eq!(template.to_string(), "template(Template)");
+    }
 
-#[test]
-fn from_str_spammer() {
-    let input = "spammer(HashValue|IPv4|IPv6)";
-    let template: Template = Template::from_str(input).unwrap();
-    assert_eq!(template.name, "spammer");
-    assert_eq!(
-        template.entity_types,
-        vec![vec![
-            EntityType::HashValue,
-            EntityType::IPv4,
-            EntityType::IPv6
-        ]]
-    );
+    #[test]
+    fn from_str() {
+        let template = Template {
+            name: "template".into(),
+            entity_types: vec![vec![EntityType::Template]],
+        };
+        assert_eq!(template, Template::from_str("template(Template)").unwrap())
+    }
+
+    #[test]
+    fn from_str_spammer() {
+        let input = "spammer(HashValue|IPv4|IPv6)";
+        let template: Template = Template::from_str(input).unwrap();
+        assert_eq!(template.name, "spammer");
+        assert_eq!(
+            template.entity_types,
+            vec![vec![
+                EntityType::HashValue,
+                EntityType::IPv4,
+                EntityType::IPv6
+            ]]
+        );
+    }
 }

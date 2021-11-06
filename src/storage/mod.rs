@@ -481,10 +481,7 @@ mod tests {
     use futures::executor::block_on;
     use std::str::FromStr;
 
-    use crate::{
-        model::{Entity, EntityType, Statement, Template},
-        storage::{Storage, DATABASE_URL},
-    };
+    use super::*;
 
     #[test]
     fn lookup_entity() {

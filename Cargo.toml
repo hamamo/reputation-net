@@ -15,6 +15,7 @@ sha2 = "*"
 chrono = { version = "*", features = ["clock"] }
 base64 = "*"
 async-std = { version = "*", features = ["attributes"] }
+async-trait = "*"
 once_cell = "*"
 libsqlite3-sys = "*"
 sqlx = { version = "*", features = ["runtime-async-std-rustls", "sqlite"] }
@@ -22,3 +23,5 @@ percent-encoding = "*"
 nom = "7.0"
 env_logger = "*"
 log = "*"
+serde = "*"
+serde_json = "*"

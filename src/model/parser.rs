@@ -193,7 +193,7 @@ pub fn statement(i: &str) -> IResult<&str, Statement> {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{Entity, Statement};
+    use super::*;
 
     #[test]
     fn email() {

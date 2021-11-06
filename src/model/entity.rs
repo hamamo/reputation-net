@@ -153,7 +153,7 @@ mod tests {
 
     use cidr::Ipv4Cidr;
 
-    use super::{Entity, EntityType};
+    use super::*;
 
     #[test]
     fn domain() {

@@ -36,7 +36,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut addr: Multiaddr = "/ip4/0.0.0.0".parse()?;
         addr.push(Protocol::Tcp(port));
         match swarm.listen_on(addr) {
-            Ok(_) => break,
+            Ok(_) => {
+                println!("Listening on port {}", port);
+                break;
+            }
             _ => continue,
         }
     }
