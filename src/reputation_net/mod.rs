@@ -41,6 +41,7 @@ pub enum Event {
 }
 
 #[derive(NetworkBehaviour)]
+#[behaviour(event_process = true)]
 pub struct ReputationNet {
     mdns: Mdns,
     gossipsub: Gossipsub,
@@ -51,18 +52,20 @@ pub struct ReputationNet {
     storage: Storage,
     #[behaviour(ignore)]
     event_sender: Sender<Event>,
+    #[behaviour(ignore)]
+    pub local_key: Keypair
 }
 
 impl ReputationNet {
     #[allow(unused_variables)]
-    pub async fn new(local_peer_id: PeerId, event_sender: Sender<Event>) -> Self {
+    pub async fn new(event_sender: Sender<Event>) -> Self {
         let storage = Storage::new().await;
         let keypair = storage.owner_trust().await.expect("could get owner trust").key.expect("owner trust has private key");
         let local_peer_id = PeerId::from(keypair.public());
         #[allow(unused_mut)]
         let mut repnet = Self {
             gossipsub: Gossipsub::new(
-                MessageAuthenticity::Signed(keypair),
+                MessageAuthenticity::Signed(keypair.clone()),
                 GossipsubConfig::default(),
             )
             .unwrap(),
@@ -75,6 +78,7 @@ impl ReputationNet {
             ),
             storage: storage,
             event_sender: event_sender,
+            local_key: keypair
         };
         for t in repnet.topics().await {
             repnet
@@ -83,6 +87,10 @@ impl ReputationNet {
                 .expect("subscribe works");
         }
         repnet
+    }
+
+    pub fn local_peer_id(&self) -> PeerId {
+        PeerId::from_public_key(&self.local_key.public())
     }
 
     fn as_topic(&self, s: &str) -> IdentTopic {
@@ -332,7 +340,7 @@ impl NetworkBehaviourEventProcess<RequestResponseEvent<RpcRequestResponse, RpcRe
         &mut self,
         event: RequestResponseEvent<RpcRequestResponse, RpcRequestResponse>,
     ) {
-        println!("rpc event: {:?}", event);
+        info!("rpc event: {:?}", event);
         match event {
             RequestResponseEvent::Message { peer: _, message } => match message {
                 RequestResponseMessage::Request {

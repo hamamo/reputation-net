@@ -5,7 +5,7 @@ use futures::{channel::mpsc, select, AsyncBufReadExt, StreamExt};
 use log::{debug, error, info};
 use std::error::Error;
 
-use libp2p::{identity, multiaddr::Protocol, Multiaddr, PeerId, Swarm};
+use libp2p::{multiaddr::Protocol, Multiaddr, Swarm};
 
 mod model;
 mod reputation_net;
@@ -16,16 +16,15 @@ use reputation_net::{Event, ReputationNet};
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
-    let local_key = identity::Keypair::generate_ed25519();
-    let local_peer_id = PeerId::from(local_key.public());
-    println!("Local peer id: {:?}", local_peer_id);
     let (mut input_sender, mut input_receiver) = mpsc::channel::<String>(3);
     let (event_sender, mut event_receiver) = mpsc::channel::<Event>(100);
 
     let mut swarm = {
-        let transport = libp2p::development_transport(local_key).await?;
+        let behaviour = ReputationNet::new(event_sender).await;
+        let transport = libp2p::development_transport(behaviour.local_key.clone()).await?;
+        let local_peer_id = behaviour.local_peer_id();
 
-        let behaviour = ReputationNet::new(local_peer_id, event_sender).await;
+        println!("Local peer id: {:?}", local_peer_id);
 
         Swarm::new(transport, behaviour, local_peer_id)
     };

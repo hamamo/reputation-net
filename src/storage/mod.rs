@@ -21,7 +21,6 @@ pub type Id = i64;
 #[derive(PartialEq)]
 pub enum PersistStatus {
     New,
-    PartiallyNew,
     Old,
 }
 
@@ -447,22 +446,13 @@ impl PersistResult {
         self.status == PersistStatus::New
     }
 
-    fn partially_new(id: Id) -> Self {
-        Self {
-            id: id,
-            status: PersistStatus::PartiallyNew,
-        }
-    }
-    pub fn is_partially_new(&self) -> bool {
-        self.status == PersistStatus::PartiallyNew
-    }
-
     fn old(id: Id) -> Self {
         Self {
             id: id,
             status: PersistStatus::Old,
         }
     }
+    #[allow(dead_code)]
     pub fn is_old(&self) -> bool {
         self.status == PersistStatus::Old
     }
@@ -470,7 +460,6 @@ impl PersistResult {
     pub fn wording(&self) -> &str {
         match self.status {
             PersistStatus::New => "new",
-            PersistStatus::PartiallyNew => "partially new",
             PersistStatus::Old => "old",
         }
     }
