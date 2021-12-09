@@ -5,7 +5,7 @@ use futures::{channel::mpsc, select, AsyncBufReadExt, StreamExt};
 use log::{debug, error, info};
 use std::error::Error;
 
-use libp2p::{multiaddr::Protocol, Multiaddr, Swarm};
+use libp2p::{multiaddr::Protocol, Multiaddr, Swarm, swarm::SwarmEvent};
 
 mod model;
 mod reputation_net;
@@ -74,7 +74,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     loop {
         select! {
             event = swarm.next() => {
-                debug!("swarm event: {:?}", event);
+                match event {
+                    Some(SwarmEvent::Behaviour(s)) => {
+                        swarm.behaviour_mut().handle_behaviour_event(s).await;
+                    }
+                    Some(SwarmEvent::ConnectionEstablished{peer_id, endpoint: _, num_established, concurrent_dial_errors: _}) => {
+                        info!("{:?}", event);
+                        swarm.behaviour_mut().handle_connection_established(peer_id, u32::from(num_established)).await;
+                    }
+                    Some(SwarmEvent::ConnectionClosed{peer_id, endpoint: _, num_established, cause: _}) => {
+                        info!("{:?}", event);
+                        swarm.behaviour_mut().handle_connection_closed(peer_id, num_established).await;
+                    }
+                    _ => ()
+                }
             },
             event = input_receiver.next() => {
                 match event {

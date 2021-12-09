@@ -12,6 +12,11 @@ pub struct Template {
     pub entity_types: Vec<Vec<EntityType>>,
 }
 
+pub struct SpecificTemplate {
+    pub name: String,
+    pub entity_types: Vec<EntityType>,
+}
+
 impl Display for Template {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
@@ -28,6 +33,22 @@ impl Display for Template {
                         .join("|")
                         .to_string()
                 })
+                .collect::<Vec<String>>()
+                .join(",")
+        )
+    }
+}
+
+impl Display for SpecificTemplate {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}({})",
+            self.name,
+            &self
+                .entity_types
+                .iter()
+                .map(EntityType::to_string)
                 .collect::<Vec<String>>()
                 .join(",")
         )

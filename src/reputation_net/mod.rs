@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 use futures::channel::mpsc::Sender;
 
@@ -30,18 +30,20 @@ use super::storage::{Id, Storage};
 
 mod requestresponse;
 mod rpc;
+mod user_input;
 use requestresponse::*;
 use rpc::*;
 
+/// These are the high level events that are communicated either via gossipsub broadcast, or via direct
+/// communication using the rpc protocol
 #[derive(Debug)]
 pub enum Event {
     NewStatement(SignedStatement, Option<PeerId>),
     TemplateRequest(Option<PeerId>),
-    SayHello(PeerId),
 }
 
 #[derive(NetworkBehaviour)]
-#[behaviour(event_process = true)]
+#[behaviour(out_event = "OutEvent")]
 pub struct ReputationNet {
     mdns: Mdns,
     gossipsub: Gossipsub,
@@ -53,14 +55,51 @@ pub struct ReputationNet {
     #[behaviour(ignore)]
     event_sender: Sender<Event>,
     #[behaviour(ignore)]
-    pub local_key: Keypair
+    pub local_key: Keypair,
+}
+
+#[derive(Debug)]
+pub enum OutEvent {
+    Mdns(MdnsEvent),
+    Gossipsub(GossipsubEvent),
+    Ping(PingEvent),
+    Rpc(RequestResponseEvent<RpcRequestResponse, RpcRequestResponse>),
+}
+
+impl From<MdnsEvent> for OutEvent {
+    fn from(v: MdnsEvent) -> Self {
+        Self::Mdns(v)
+    }
+}
+
+impl From<GossipsubEvent> for OutEvent {
+    fn from(v: GossipsubEvent) -> Self {
+        Self::Gossipsub(v)
+    }
+}
+
+impl From<PingEvent> for OutEvent {
+    fn from(v: PingEvent) -> Self {
+        Self::Ping(v)
+    }
+}
+
+impl From<RequestResponseEvent<RpcRequestResponse, RpcRequestResponse>> for OutEvent {
+    fn from(v: RequestResponseEvent<RpcRequestResponse, RpcRequestResponse>) -> Self {
+        Self::Rpc(v)
+    }
 }
 
 impl ReputationNet {
     #[allow(unused_variables)]
     pub async fn new(event_sender: Sender<Event>) -> Self {
         let storage = Storage::new().await;
-        let keypair = storage.owner_trust().await.expect("could get owner trust").key.expect("owner trust has private key");
+        let keypair = storage
+            .owner_trust()
+            .await
+            .expect("could get owner trust")
+            .key
+            .expect("owner trust has private key");
         let local_peer_id = PeerId::from(keypair.public());
         #[allow(unused_mut)]
         let mut repnet = Self {
@@ -70,7 +109,11 @@ impl ReputationNet {
             )
             .unwrap(),
             mdns: Mdns::new(MdnsConfig::default()).await.unwrap(),
-            ping: Ping::new(PingConfig::new()),
+            ping: Ping::new(
+                PingConfig::new()
+                    .with_interval(Duration::new(90, 0))
+                    .with_keep_alive(true),
+            ),
             rpc: RequestResponse::new(
                 RpcCodec {},
                 vec![(RpcProtocol::Version1, ProtocolSupport::Full)].into_iter(),
@@ -78,7 +121,7 @@ impl ReputationNet {
             ),
             storage: storage,
             event_sender: event_sender,
-            local_key: keypair
+            local_key: keypair,
         };
         for t in repnet.topics().await {
             repnet
@@ -110,41 +153,6 @@ impl ReputationNet {
                 .collect(),
             Err(_) => vec![],
         }
-    }
-
-    pub async fn handle_input(&mut self, what: &str) {
-        /* for now, create opinions with default values. I don't know yet how the UI should look finally */
-
-        match what.parse() {
-            Ok(statement) => match self
-                .storage
-                .persist_statement_hashing_emails(&statement)
-                .await
-            {
-                Ok((persist_result, actual_statement)) => {
-                    println!(
-                        "{} statement {} has id {}",
-                        persist_result.wording(),
-                        actual_statement,
-                        persist_result.id
-                    );
-                    let signed_statement = self
-                        .sign_statement(actual_statement, persist_result.id)
-                        .await
-                        .unwrap();
-                    // we ignore the possible error when no peers are currently connected
-                    self.publish_statement(&signed_statement).await;
-                }
-                Err(_e) => {
-                    println!("No matching template: {}", statement.minimal_template());
-                    println!("Available:");
-                    for t in self.storage.list_templates(&statement.name).await.iter() {
-                        println!("  {}", t)
-                    }
-                }
-            },
-            Err(e) => println!("Invalid statement format: {:?}", e),
-        };
     }
 
     pub async fn sign_statement(
@@ -186,13 +194,13 @@ impl ReputationNet {
     }
 
     pub async fn handle_event(&mut self, event: &Event) {
-        debug!("got event: {:?}", event);
+        info!("got event: {:?}", event);
         match event {
             Event::NewStatement(signed_statement, _peer) => {
                 let statement = &signed_statement.statement;
                 match self.storage.persist_statement(statement).await {
                     Ok(persist_result) => {
-                        info!(
+                        println!(
                             "{} statement {} has id {}",
                             persist_result.wording(),
                             statement,
@@ -247,24 +255,34 @@ impl ReputationNet {
                     }
                 }
             }
-            Event::SayHello(peer) => {
-                self.rpc
-                    .send_request(peer, RpcRequestResponse::Hello("good morning!".into()));
-            }
         }
     }
-}
 
-impl NetworkBehaviourEventProcess<GossipsubEvent> for ReputationNet {
-    // Called when `Gossipsub` produces an event.
-    fn inject_event(&mut self, event: GossipsubEvent) {
-        debug!("Gossipsub event: {:?}", event);
+    pub async fn handle_behaviour_event(&mut self, event: OutEvent) {
+        debug!("got behaviour event: {:?}", event);
         match event {
-            GossipsubEvent::Message {
+            OutEvent::Mdns(MdnsEvent::Discovered(list)) => {
+                let mut peers = HashSet::new();
+                for (peer, address) in list {
+                    self.rpc.add_address(&peer, address);
+                    peers.insert(peer);
+                }
+                for peer in peers {
+                    self.gossipsub.add_explicit_peer(&peer);
+                }
+            }
+            OutEvent::Mdns(MdnsEvent::Expired(list)) => {
+                for (peer, _addr) in list {
+                    if !self.mdns.has_node(&peer) {
+                        self.gossipsub.remove_explicit_peer(&peer);
+                    }
+                }
+            }
+            OutEvent::Gossipsub(GossipsubEvent::Message {
                 propagation_source,
                 message_id,
                 message,
-            } => {
+            }) => {
                 let string = String::from_utf8_lossy(&message.data);
                 match string.parse::<SignedStatement>() {
                     Ok(signed_statement) => {
@@ -285,7 +303,7 @@ impl NetworkBehaviourEventProcess<GossipsubEvent> for ReputationNet {
                     }
                 }
             }
-            GossipsubEvent::Subscribed { peer_id, topic } => {
+            OutEvent::Gossipsub(GossipsubEvent::Subscribed { peer_id, topic }) => {
                 if topic.as_str() == "template" {
                     debug!("peer {} wants topics, using broadcast for now", peer_id);
                     self.event_sender
@@ -293,56 +311,7 @@ impl NetworkBehaviourEventProcess<GossipsubEvent> for ReputationNet {
                         .unwrap();
                 }
             }
-            _ => (),
-        }
-    }
-}
-
-impl NetworkBehaviourEventProcess<MdnsEvent> for ReputationNet {
-    // Called when `mdns` produces an event.
-    fn inject_event(&mut self, event: MdnsEvent) {
-        debug!("mdns event: {:?}", event);
-        match event {
-            MdnsEvent::Discovered(list) => {
-                let mut peers = HashSet::new();
-                for (peer, address) in list {
-                    self.rpc.add_address(&peer, address);
-                    peers.insert(peer);
-                }
-                for peer in peers {
-                    self.gossipsub.add_explicit_peer(&peer);
-                    self.event_sender
-                        .try_send(Event::SayHello(peer))
-                        .expect("could send greeting");
-                }
-            }
-            MdnsEvent::Expired(list) => {
-                for (peer, _addr) in list {
-                    if !self.mdns.has_node(&peer) {
-                        self.gossipsub.remove_explicit_peer(&peer);
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl NetworkBehaviourEventProcess<PingEvent> for ReputationNet {
-    fn inject_event(&mut self, event: PingEvent) {
-        debug!("ping event: {:?}", event);
-    }
-}
-
-impl NetworkBehaviourEventProcess<RequestResponseEvent<RpcRequestResponse, RpcRequestResponse>>
-    for ReputationNet
-{
-    fn inject_event(
-        &mut self,
-        event: RequestResponseEvent<RpcRequestResponse, RpcRequestResponse>,
-    ) {
-        info!("rpc event: {:?}", event);
-        match event {
-            RequestResponseEvent::Message { peer: _, message } => match message {
+            OutEvent::Rpc(RequestResponseEvent::Message { peer: _, message }) => match message {
                 RequestResponseMessage::Request {
                     request_id: _,
                     request: _,
@@ -353,7 +322,24 @@ impl NetworkBehaviourEventProcess<RequestResponseEvent<RpcRequestResponse, RpcRe
                 }
                 _ => (),
             },
+            OutEvent::Ping(event) => {
+                info!("ping event: {:?}", event);
+            }
             _ => (),
         }
+    }
+
+    pub async fn handle_connection_established(&mut self, peer_id: PeerId, num_established: u32) {
+        info!(
+            "got connection to {:?} ({} connections)",
+            peer_id, num_established
+        );
+    }
+
+    pub async fn handle_connection_closed(&mut self, peer_id: PeerId, num_established: u32) {
+        info!(
+            "connection to {:?} was closed ({} connections)",
+            peer_id, num_established
+        );
     }
 }

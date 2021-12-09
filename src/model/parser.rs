@@ -63,8 +63,8 @@ fn name(i: &str) -> nom::IResult<&str, &str> {
 // a domain name label
 fn label(i: &str) -> nom::IResult<&str, &str> {
     recognize(tuple((
-        alpha1,
-        many0(alt((alpha1, tag("-")))),
+        alphanumeric1,
+        many0(alt((alphanumeric1, tag("-")))),
         opt(alphanumeric1),
     )))(i)
 }
@@ -72,7 +72,7 @@ fn label(i: &str) -> nom::IResult<&str, &str> {
 // a domain name
 fn domain(i: &str) -> IResult<&str, Entity> {
     map(
-        recognize(tuple((label, tag("."), separated_list1(tag("."), label)))),
+        recognize(tuple((many0(tuple((label, tag(".")))), alpha1))),
         |s| Entity::Domain(s.into()),
     )(i)
 }
@@ -168,7 +168,7 @@ pub fn signer(i: &str) -> IResult<&str, Entity> {
 }
 
 pub fn entity(i: &str) -> IResult<&str, Entity> {
-    alt((email, hash_value, template, asn, ipv4, ipv6, domain, signer))(i)
+    alt((email, hash_value, template, asn, signer, domain, ipv4, ipv6))(i)
 }
 
 pub fn statement(i: &str) -> IResult<&str, Statement> {
@@ -223,6 +223,20 @@ mod tests {
     fn asn() {
         assert_eq!(("", Entity::AS(123)), super::asn("AS123").unwrap());
         assert_eq!((",", Entity::AS(123)), super::asn("AS123,").unwrap());
+    }
+    #[test]
+    fn domain() {
+        // domain starting with a digit
+        // not allowed according to RFC1035, but used anyway
+        assert_eq!(
+            super::entity("3gen.com.mx").unwrap(),
+            ("", Entity::Domain("3gen.com.mx".into())),
+        );
+        // tld, marked by trailing dot
+        assert_eq!(
+            super::entity("biz").unwrap(),
+            ("", Entity::Domain("biz".into())),
+        )
     }
     #[test]
     fn statement() {

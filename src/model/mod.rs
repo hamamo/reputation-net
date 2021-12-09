@@ -9,12 +9,14 @@ mod publickey;
 mod statement;
 mod template;
 mod trust;
+mod date;
 pub use entity::{Entity, EntityType};
 pub use opinion::{Opinion,SignedOpinion,SignedStatement,today};
 pub use publickey::{PublicKey, Signature};
 pub use statement::Statement;
 pub use template::Template;
 pub use trust::Trust;
+pub use date::Date;
 
 fn percent_encode(s: &str) -> String {
     const ESCAPE: &AsciiSet = &CONTROLS

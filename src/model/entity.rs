@@ -118,6 +118,53 @@ impl Entity {
             _ => self.clone()
         }
     }
+
+    pub fn domain(&self) -> Option<Self> {
+        match self {
+            Self::EMail(address) => {
+                let at_index = address.find("@").unwrap();
+                Some(Self::Domain(address[at_index+1..].into()))
+            }
+            Self::Domain(domain) => {
+                let dot_index = domain.find(".");
+                match dot_index {
+                    None => None,
+                    Some(n) => {
+                        if n == domain.len()-1 {
+                            None
+                        } else {
+                            let mut super_domain = domain[n+1..].to_string();
+                            if let None = super_domain.find(".") {
+                                super_domain.push_str(".");
+                            }
+                            Some(Self::Domain(super_domain))
+                        }
+                    }
+                }
+            }
+            _ => None
+        }
+    }
+
+    /// Return a list of all lookup keys that should be considered to find matching statements, from most to least specific
+    pub fn all_lookup_keys(&self) -> Vec<Self> {
+        match self {
+            Self::EMail(_) => {
+                let mut result = vec![self.clone(), self.hash_emails()];
+                let mut domains = self.domain().unwrap().all_lookup_keys();
+                result.append(&mut domains);
+                result
+            }
+            Self::Domain(_) => {
+                let mut result = vec![self.clone()];
+                if let Some(super_domain) = self.domain() {
+                     result.append(&mut super_domain.all_lookup_keys())
+                }
+                result
+            }
+            _ => vec![self.clone()]
+        }
+    }
 }
 
 impl Display for Entity {
@@ -204,7 +251,6 @@ mod tests {
             )
         }
     }
-
     #[test]
     fn signer_display() {
         let keypair = super::super::tests::example_keypair();
@@ -214,5 +260,30 @@ mod tests {
             signer.to_string(),
             super::super::tests::example_signer()
         );
+    }
+    #[test]
+    fn domain_lookup_keys() {
+        let domain = Entity::Domain("domain.example.biz".into());
+        assert_eq!(
+            domain.all_lookup_keys(),
+            vec![
+                domain.clone(),
+                Entity::Domain("example.biz".into()),
+                Entity::Domain("biz.".into())
+            ]
+        )
+    }
+    #[test]
+    fn email_lookup_keys() {
+        let email = Entity::EMail("spammer@example.com".into());
+        assert_eq!(
+            email.all_lookup_keys(),
+            vec![
+                email.clone(),
+                email.hash_emails(),
+                Entity::Domain("example.com".into()),
+                Entity::Domain("com.".into())
+            ]
+        )
     }
 }

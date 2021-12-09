@@ -5,7 +5,7 @@ use std::{
 
 use nom::combinator::all_consuming;
 
-use super::{entity::Entity, parser, template::Template};
+use super::{entity::Entity, parser, template::{SpecificTemplate, Template}};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Statement {
@@ -22,13 +22,13 @@ impl Statement {
         }
     }
 
-    pub fn minimal_template(&self) -> Template {
-        Template {
+    pub fn specific_template(&self) -> SpecificTemplate {
+        SpecificTemplate {
             name: self.name.clone(),
             entity_types: self
                 .entities
                 .iter()
-                .map(|x| vec![x.entity_type()])
+                .map(|x| x.entity_type())
                 .collect(),
         }
     }

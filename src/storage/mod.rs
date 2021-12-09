@@ -6,13 +6,16 @@ use log::info;
 // library imports
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow},
-    ConnectOptions, Error, Row,
+    ConnectOptions, Error, Row, Sqlite,
 };
 
 // own imports
 use super::model::{Entity, EntityType, SignedOpinion, Statement, Template, Trust};
 
 const DATABASE_URL: &str = "sqlite:reputation.sqlite3?mode=rwc";
+
+/// The database type, currently only Sqlite
+pub type DB = Sqlite;
 
 /// The database id type, i64 for PostgreSQL (the only supported database backend at the moment).
 pub type Id = i64;
@@ -54,7 +57,6 @@ impl Storage {
         db.cleanup().await.expect("could cleanup");
         db
     }
-
 
     /// initialize the database with the schema and well-known facts
     /// this should be idempotent, i.e. if the database is already initialized it should do nothing,
@@ -120,18 +122,24 @@ impl Storage {
         Ok(())
     }
 
+    /// Find an entity.
+    pub async fn find_entity(&self, entity: &Entity) -> Result<Option<Id>, Error> {
+        let string = entity.to_string();
+        let kind = entity.entity_type() as i64;
+        sqlx::query("select id from entity where kind = ? and value = ?")
+            .bind(kind)
+            .bind(&string)
+            .map(|row: SqliteRow| -> Id { row.get::<Id, &str>("id") })
+            .fetch_optional(&self.pool)
+            .await
+    }
+
     /// Select or insert an entity.
     pub async fn persist_entity(&self, entity: &Entity) -> Result<PersistResult, Error> {
         let string = entity.to_string();
         let kind = entity.entity_type() as i64;
 
-        let result = sqlx::query("select id from entity where kind = ? and value = ?")
-            .bind(kind)
-            .bind(&string)
-            .map(|row: SqliteRow| -> Id { row.get::<Id, &str>("id") })
-            .fetch_optional(&self.pool)
-            .await;
-        match result {
+        match self.find_entity(entity).await {
             Ok(opt) => {
                 if let Some(id) = opt {
                     Ok(PersistResult::old(id))
@@ -169,7 +177,8 @@ impl Storage {
         })
     }
 
-    // return all entities with a given kind
+    /// Find an entity
+    /// Return all entities with a given kind
     pub async fn list_entities(&self, kind: EntityType) -> Result<Vec<Entity>, Error> {
         let result = sqlx::query("select value from entity where kind=?")
             .bind(kind as i64)
@@ -219,6 +228,85 @@ impl Storage {
 
     pub async fn list_templates(&self, _name: &str) -> Vec<Template> {
         vec![]
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_statement(&self, statement_id: Id) -> Result<Option<Statement>, Error> {
+        match sqlx::query_as::<DB, (Id, String, String)>(
+            "select
+                s.id,
+                t.value,
+                e.value
+            from
+                statement s
+                join entity t on t.id = s.template_id
+                join entity e on e.id = s.first_entity_id
+            where
+                s.id = ?",
+        )
+        .bind(statement_id)
+        .fetch_one(&self.pool)
+        .await
+        {
+            Ok((_statement_id, template_value, entity_value)) => {
+                let template = Entity::from_str(&template_value).unwrap();
+                let entity = Entity::from_str(&entity_value).unwrap();
+                match template {
+                    Entity::Template(t) => {
+                        let name = t.name;
+                        return Ok(Some(Statement {
+                            name: name,
+                            entities: vec![entity],
+                        }));
+                    }
+                    _ => Ok(None),
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// this currently does not handle multi-entity statements
+    pub async fn find_statements_referencing(
+        &self,
+        entity: &Entity,
+    ) -> Result<Vec<Statement>, Error> {
+        let rows = sqlx::query_as::<DB, (Id, String, String)>(
+            "select
+                s.id,
+                t.value,
+                e.value
+            from
+                statement s
+                join entity t on t.id = s.template_id
+                join entity e on e.id = s.first_entity_id
+            where
+                e.value = ?",
+        )
+        .bind(entity.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let statements = rows
+            .iter()
+            .map(|(_statement_id, template_value, entity_value)| {
+                let template = Entity::from_str(template_value).unwrap();
+                let entity = Entity::from_str(entity_value).unwrap();
+                match template {
+                    Entity::Template(t) => {
+                        let name = t.name;
+                        Statement {
+                            name: name,
+                            entities: vec![entity],
+                        }
+                    }
+                    _ => Statement {
+                        name: "?".into(),
+                        entities: vec![entity],
+                    },
+                }
+            })
+            .collect();
+        Ok(statements)
     }
 
     pub async fn persist_statement(&self, statement: &Statement) -> Result<PersistResult, Error> {
@@ -356,6 +444,18 @@ impl Storage {
             .await?;
         tx.commit().await?;
         Ok(PersistResult::new(id))
+    }
+
+    pub async fn find_statements_about(&self, entity: &Entity) -> Result<Vec<Statement>, Error> {
+        // Naive implementation without using sql shortcuts.
+        // We can't use map() because that doesn't work with async closures.
+        // Need to find out how to do it with streams.
+        let mut statements = vec![];
+        for e in entity.all_lookup_keys() {
+            let mut list = self.find_statements_referencing(&e).await?;
+            statements.append(&mut list);
+        }
+        Ok(statements)
     }
 
     pub async fn owner_trust(&self) -> Result<Trust, Error> {
