@@ -1,11 +1,12 @@
 use std::{
     fmt::{self, Display, Formatter},
     str::FromStr,
+    hash::{Hash, Hasher}
 };
 
 pub type Signature = Vec<u8>;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicKey {
     pub key: libp2p::core::PublicKey,
 }
@@ -23,6 +24,12 @@ impl Display for PublicKey {
                 write!(f, "rsa:{}", &base64::encode(pk.encode_x509()))
             }
         }
+    }
+}
+
+impl Hash for PublicKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.to_string().hash(state);
     }
 }
 

@@ -2,13 +2,13 @@ use libp2p::identity::{Keypair};
 
 use super::{Entity, PublicKey};
 
-pub struct Trust {
+pub struct OwnKey {
     pub signer: Entity,
     pub level: u8,
-    pub key: Option<Keypair>,
+    pub key: Keypair,
 }
 
-impl Trust {
+impl OwnKey {
 
     // create a new (owner) Trust entry
     pub fn new() -> Self {
@@ -17,14 +17,14 @@ impl Trust {
         Self {
             signer: signer,
             level: 0,
-            key: Some(keypair)
+            key: keypair
         }
     }
 
     pub fn privkey_string(&self) -> String {
         match &self.key {
-            Some(Keypair::Secp256k1(keypair)) => base64::encode(&keypair.secret().to_bytes()),
-            _ => "".to_string()
+            Keypair::Secp256k1(keypair) => base64::encode(&keypair.secret().to_bytes()),
+            _ => "".into()
         }
     }
 }

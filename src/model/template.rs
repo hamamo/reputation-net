@@ -6,7 +6,7 @@ use super::parser;
 
 use super::entity::{Entity, EntityType};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Template {
     pub name: String,
     pub entity_types: Vec<Vec<EntityType>>,

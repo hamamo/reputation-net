@@ -22,6 +22,10 @@ impl Statement {
         }
     }
 
+    pub fn signer(signer: Entity) -> Self {
+        Self::new("signer", vec![signer])
+    }
+
     pub fn specific_template(&self) -> SpecificTemplate {
         SpecificTemplate {
             name: self.name.clone(),

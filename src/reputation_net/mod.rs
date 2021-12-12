@@ -25,7 +25,7 @@ use libp2p::{
     NetworkBehaviour, PeerId,
 };
 
-use super::model::{today, Entity, EntityType, Opinion, SignedStatement, Statement};
+use super::model::{today, Entity, Opinion, SignedStatement, Statement};
 use super::storage::{Id, Storage};
 
 mod requestresponse;
@@ -93,13 +93,8 @@ impl From<RequestResponseEvent<RpcRequestResponse, RpcRequestResponse>> for OutE
 impl ReputationNet {
     #[allow(unused_variables)]
     pub async fn new(event_sender: Sender<Event>) -> Self {
-        let storage = Storage::new().await;
-        let keypair = storage
-            .owner_trust()
-            .await
-            .expect("could get owner trust")
-            .key
-            .expect("owner trust has private key");
+        let mut storage = Storage::new().await;
+        let keypair = storage.own_key().await.expect("could get own key").key;
         let local_peer_id = PeerId::from(keypair.public());
         #[allow(unused_mut)]
         let mut repnet = Self {
@@ -141,7 +136,7 @@ impl ReputationNet {
     }
 
     pub async fn topics(&self) -> Vec<String> {
-        match self.storage.list_entities(EntityType::Template).await {
+        match self.storage.list_all_templates().await {
             Ok(templates) => templates
                 .into_iter()
                 .map(|entity| match entity {
@@ -167,20 +162,16 @@ impl ReputationNet {
             certainty: 3,
             comment: "".into(),
         };
-        let trust = self.storage.owner_trust().await.unwrap();
-        if let Some(keypair) = trust.key {
-            let signed_opinion = opinion.sign_using(&statement.signable_bytes(), &keypair);
-            self.storage
-                .persist_opinion(&signed_opinion, statement_id)
-                .await
-                .unwrap();
-            Some(SignedStatement {
-                statement: statement,
-                opinions: vec![signed_opinion],
-            })
-        } else {
-            None
-        }
+        let own_key = self.storage.own_key().await.unwrap();
+        let signed_opinion = opinion.sign_using(&statement.signable_bytes(), &own_key.key);
+        self.storage
+            .persist_opinion(&signed_opinion, statement_id)
+            .await
+            .unwrap();
+        Some(SignedStatement {
+            statement: statement,
+            opinions: vec![signed_opinion],
+        })
     }
 
     pub async fn publish_statement(&mut self, signed_statement: &SignedStatement) {
@@ -189,7 +180,7 @@ impl ReputationNet {
             signed_statement.to_string(),
         ) {
             Ok(_mid) => info!("published ok"),
-            Err(err) => error!("could not publish: {:?}", err),
+            Err(err) => info!("could not publish: {:?}", err),
         };
     }
 
@@ -200,7 +191,7 @@ impl ReputationNet {
                 let statement = &signed_statement.statement;
                 match self.storage.persist_statement(statement).await {
                     Ok(persist_result) => {
-                        println!(
+                        info!(
                             "{} statement {} has id {}",
                             persist_result.wording(),
                             statement,
@@ -231,27 +222,21 @@ impl ReputationNet {
                 }
             }
             Event::TemplateRequest(_peer) => {
-                let entities = self
-                    .storage
-                    .list_entities(EntityType::Template)
-                    .await
-                    .unwrap();
+                let entities = self.storage.list_all_templates().await.unwrap();
                 for entity in entities {
                     let statement = Statement {
                         name: "template".into(),
                         entities: vec![entity],
                     };
                     let opinion = Opinion::default();
-                    if let Ok(trust) = self.storage.owner_trust().await {
-                        if let Some(keypair) = trust.key {
-                            let signed_statement = SignedStatement {
-                                opinions: vec![
-                                    opinion.sign_using(&statement.signable_bytes(), &keypair)
-                                ],
-                                statement: statement,
-                            };
-                            self.publish_statement(&signed_statement).await;
-                        }
+                    if let Ok(own_key) = self.storage.own_key().await {
+                        let signed_statement = SignedStatement {
+                            opinions: vec![
+                                opinion.sign_using(&statement.signable_bytes(), &own_key.key)
+                            ],
+                            statement: statement,
+                        };
+                        self.publish_statement(&signed_statement).await;
                     }
                 }
             }

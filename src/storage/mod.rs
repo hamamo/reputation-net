@@ -1,16 +1,18 @@
 // store entities, statements, opinions persistently
-use std::str::FromStr;
+use std::{collections::HashSet, str::FromStr};
 
 use libp2p::identity::Keypair;
-use log::info;
+
 // library imports
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow},
     ConnectOptions, Error, Row, Sqlite,
 };
 
+use crate::model::{today, Opinion, PublicKey};
+
 // own imports
-use super::model::{Entity, EntityType, SignedOpinion, Statement, Template, Trust};
+use super::model::{Entity, OwnKey, SignedOpinion, Statement, Template};
 
 const DATABASE_URL: &str = "sqlite:reputation.sqlite3?mode=rwc";
 
@@ -38,6 +40,8 @@ pub struct PersistResult {
 /// Currently does not include caches.
 pub struct Storage {
     pool: SqlitePool,
+    templates: HashSet<Template>,
+    signers: HashSet<PublicKey>,
 }
 
 impl Storage {
@@ -46,12 +50,14 @@ impl Storage {
     pub async fn new() -> Self {
         let mut options = SqliteConnectOptions::from_str(DATABASE_URL).unwrap();
         options.log_statements(log::LevelFilter::Debug);
-        let db = Self {
+        let mut db = Self {
             pool: SqlitePoolOptions::new()
                 .max_connections(5)
                 .connect_with(options)
                 .await
                 .unwrap(),
+            templates: HashSet::new(),
+            signers: HashSet::new(),
         };
         db.initialize_database().await.expect("could initialize");
         db.cleanup().await.expect("could cleanup");
@@ -61,27 +67,17 @@ impl Storage {
     /// initialize the database with the schema and well-known facts
     /// this should be idempotent, i.e. if the database is already initialized it should do nothing,
     /// but for a partially initialized database it should complete initialization.
-    async fn initialize_database(&self) -> Result<(), Error> {
+    async fn initialize_database(&mut self) -> Result<(), Error> {
         let defs = vec![
-            "create table entity(
-                id integer primary key,
-                kind integer not null,
-                value text unique not null
-            )",
+            // statements must have no more than 4 entities (most likely 3 would be generous already)
             "create table statement(
                 id integer primary key,
-                template_id integer not null,
-                first_entity_id integer not null,
-                foreign key(template_id) references entity(id),
-                foreign key(first_entity_id) references entity(id)
-            )",
-            "create table statement_entity(
-                statement_id integer not null,
-                position integer not null,
-                entity_id integer not null,
-                foreign key(statement_id) references statement(id),
-                foreign key(entity_id) references entity(id),
-                unique(statement_id,position)
+                name text not null,
+                entity_1 text not null,
+                entity_2 text,
+                entity_3 text,
+                entity_4 text,
+                unique(name,entity_1,entity_2,entity_3,entity_4)
             )",
             "create table opinion(
                 id integer primary key,
@@ -91,15 +87,15 @@ impl Storage {
                 valid integer not null,
                 serial integer not null,
                 certainty integer not null,
-                signature text,
+                signature text not null,
+                unique(statement_id,signer_id,date,serial),
                 foreign key(statement_id) references statement(id),
-                foreign key(signer_id) references entity(id)
+                foreign key(signer_id) references statement(id)
             )",
-            "create table trust(
+            "create table private_key(
                 signer_id integer not null,
-                level integer not null,
-                key text,
-                foreign key(signer_id) references entity(id)
+                key text not null,
+                foreign key(signer_id) references statement(id)
             )",
         ];
 
@@ -112,155 +108,129 @@ impl Storage {
         }
 
         // insert the root template, this is currently manual
-        let entity = Entity::from_str("template(Template)").unwrap();
-        self.persist_entity(&entity).await?;
-        let statement = Statement::from_str("template(template(Template))").unwrap();
-        self.persist_statement(&statement).await?;
+        let template_statement = Statement::from_str("template(template(Template))").unwrap();
+        self.persist_statement(&template_statement).await?;
+
+        // insert the "signer" template
+        let signer_statement = Statement::from_str("template(signer(Signer))").unwrap();
+        self.persist_statement(&signer_statement).await?;
 
         // make sure an owner trust entry exists
-        self.owner_trust().await?;
+        let own_key = self.own_key().await?;
+
+        // sign the predefined statements with it
+        self.sign_statement_default(&template_statement, &own_key)
+            .await?;
+        self.sign_statement_default(&signer_statement, &own_key)
+            .await?;
+
+        // fill templates and signers
+        self.read_templates().await?;
+        self.read_signers().await?;
+
         Ok(())
     }
 
-    /// Find an entity.
-    pub async fn find_entity(&self, entity: &Entity) -> Result<Option<Id>, Error> {
-        let string = entity.to_string();
-        let kind = entity.entity_type() as i64;
-        sqlx::query("select id from entity where kind = ? and value = ?")
-            .bind(kind)
-            .bind(&string)
-            .map(|row: SqliteRow| -> Id { row.get::<Id, &str>("id") })
-            .fetch_optional(&self.pool)
-            .await
-    }
-
-    /// Select or insert an entity.
-    pub async fn persist_entity(&self, entity: &Entity) -> Result<PersistResult, Error> {
-        let string = entity.to_string();
-        let kind = entity.entity_type() as i64;
-
-        match self.find_entity(entity).await {
-            Ok(opt) => {
-                if let Some(id) = opt {
-                    Ok(PersistResult::old(id))
-                } else {
-                    let mut tx = self.pool.begin().await.unwrap();
-                    sqlx::query("insert into entity(kind, value) values(?,?)")
-                        .bind(kind)
-                        .bind(string)
-                        .execute(&mut tx)
-                        .await
-                        .expect("insert entity");
-                    let id = sqlx::query("select last_insert_rowid()")
-                        .map(|row: SqliteRow| -> Id { row.get::<Id, usize>(0) })
-                        .fetch_one(&mut tx)
-                        .await?;
-                    tx.commit().await?;
-                    Ok(PersistResult::new(id))
-                }
+    pub async fn read_templates(&mut self) -> Result<(), Error> {
+        let template_entries = sqlx::query_scalar::<DB, String>(
+            "select entity_1 from statement where name='template'",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        for s in template_entries {
+            if let Ok(template) = Template::from_str(&s) {
+                self.templates.insert(template);
             }
-            Err(e) => Err(e),
         }
+        Ok(())
     }
 
-    /// Return the entity with the given Id.
-    pub async fn get_entity(&self, id: Id) -> Result<Option<Entity>, Error> {
-        let result = sqlx::query("select value from entity where id=?")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(if let Some(row) = result {
-            let value = row.get::<String, usize>(0);
-            Some(Entity::from_str(&value).expect("parseable entity"))
-        } else {
-            None
-        })
-    }
-
-    /// Find an entity
-    /// Return all entities with a given kind
-    pub async fn list_entities(&self, kind: EntityType) -> Result<Vec<Entity>, Error> {
-        let result = sqlx::query("select value from entity where kind=?")
-            .bind(kind as i64)
-            .fetch_all(&self.pool)
-            .await;
-        match result {
-            Ok(rows) => {
-                let list = rows
-                    .iter()
-                    .map(|row| {
-                        let value = row.get::<String, usize>(0);
-                        info!("parsing entity {}", value);
-                        Entity::from_str(&value).expect("parseable entity")
-                    })
-                    .collect();
-                Ok(list)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    #[allow(dead_code)] // used in tests
-    pub async fn persist_template(&self, template: &Template) -> Result<PersistResult, Error> {
-        self.persist_entity(&Entity::Template(template.clone()))
-            .await
-    }
-
-    pub async fn find_matching_template(
-        &self,
-        statement: &Statement,
-    ) -> Result<PersistResult, Error> {
-        let rows: Vec<SqliteRow> =
-            sqlx::query("select id,value from entity where kind=? and value like ?")
-                .bind(EntityType::Template as i64)
-                .bind(format!("{}(%", statement.name))
+    pub async fn read_signers(&mut self) -> Result<(), Error> {
+        let signer_entries =
+            sqlx::query_scalar::<DB, String>("select entity_1 from statement where name='signer'")
                 .fetch_all(&self.pool)
                 .await?;
-        for row in rows {
-            let id = row.get::<Id, usize>(0);
-            let template = Template::from_str(&row.get::<String, usize>(1)).unwrap();
-            if statement.matches_template(&template) {
-                return Ok(PersistResult::old(id));
+        for s in signer_entries {
+            if let Ok(signer) = PublicKey::from_str(&s) {
+                self.signers.insert(signer);
             }
         }
-        Err(Error::RowNotFound)
+        Ok(())
+    }
+
+    pub async fn has_matching_template(&self, statement: &Statement) -> bool {
+        if statement.name == "template" {
+            // always accept templates to allow bootstrapping
+            return true;
+        }
+        for template in &self.templates {
+            if statement.matches_template(template) {
+                return true;
+            }
+        }
+        false
     }
 
     pub async fn list_templates(&self, _name: &str) -> Vec<Template> {
         vec![]
     }
 
+    pub async fn list_all_templates(&self) -> Result<Vec<Entity>, Error> {
+        let rows = sqlx::query_scalar::<DB, String>(
+            "select
+                entity_1
+            from
+                statement
+            where
+                name = 'template'",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(|s| Entity::from_str(s).unwrap()).collect())
+    }
+
     #[allow(dead_code)]
     pub async fn get_statement(&self, statement_id: Id) -> Result<Option<Statement>, Error> {
-        match sqlx::query_as::<DB, (Id, String, String)>(
+        match sqlx::query_as::<
+            DB,
+            (
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            ),
+        >(
             "select
-                s.id,
-                t.value,
-                e.value
+                name,
+                entity_1,
+                entity_2,
+                entity_3,
+                entity_4
             from
-                statement s
-                join entity t on t.id = s.template_id
-                join entity e on e.id = s.first_entity_id
+                statement
             where
-                s.id = ?",
+                id = ?",
         )
         .bind(statement_id)
         .fetch_one(&self.pool)
         .await
         {
-            Ok((_statement_id, template_value, entity_value)) => {
-                let template = Entity::from_str(&template_value).unwrap();
-                let entity = Entity::from_str(&entity_value).unwrap();
-                match template {
-                    Entity::Template(t) => {
-                        let name = t.name;
-                        return Ok(Some(Statement {
-                            name: name,
-                            entities: vec![entity],
-                        }));
-                    }
-                    _ => Ok(None),
+            Ok((name, entity_1, entity_2, entity_3, entity_4)) => {
+                let mut entities = vec![Entity::from_str(&entity_1.as_str()).unwrap()];
+                if let Some(entity) = entity_2 {
+                    entities.push(Entity::from_str(&entity.as_str()).unwrap())
                 }
+                if let Some(entity) = entity_3 {
+                    entities.push(Entity::from_str(&entity.as_str()).unwrap())
+                }
+                if let Some(entity) = entity_4 {
+                    entities.push(Entity::from_str(&entity.as_str()).unwrap())
+                }
+                return Ok(Some(Statement {
+                    name: name,
+                    entities: entities,
+                }));
             }
             _ => Ok(None),
         }
@@ -271,101 +241,160 @@ impl Storage {
         &self,
         entity: &Entity,
     ) -> Result<Vec<Statement>, Error> {
-        let rows = sqlx::query_as::<DB, (Id, String, String)>(
+        let rows = sqlx::query_as::<
+            DB,
+            (
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            ),
+        >(
             "select
-                s.id,
-                t.value,
-                e.value
+                name,
+                entity_1,
+                entity_2,
+                entity_3,
+                entity_4
             from
-                statement s
-                join entity t on t.id = s.template_id
-                join entity e on e.id = s.first_entity_id
+                statement
             where
-                e.value = ?",
+                entity_1 = ?",
         )
         .bind(entity.to_string())
         .fetch_all(&self.pool)
         .await?;
         let statements = rows
             .iter()
-            .map(|(_statement_id, template_value, entity_value)| {
-                let template = Entity::from_str(template_value).unwrap();
-                let entity = Entity::from_str(entity_value).unwrap();
-                match template {
-                    Entity::Template(t) => {
-                        let name = t.name;
-                        Statement {
-                            name: name,
-                            entities: vec![entity],
-                        }
-                    }
-                    _ => Statement {
-                        name: "?".into(),
-                        entities: vec![entity],
-                    },
+            .map(|(name, entity_1, entity_2, entity_3, entity_4)| {
+                let mut entities = vec![Entity::from_str(entity_1).unwrap()];
+                if let Some(entity) = entity_2 {
+                    entities.push(Entity::from_str(entity).unwrap())
+                }
+                if let Some(entity) = entity_3 {
+                    entities.push(Entity::from_str(entity).unwrap())
+                }
+                if let Some(entity) = entity_4 {
+                    entities.push(Entity::from_str(entity).unwrap())
+                }
+
+                Statement {
+                    name: name.to_string(),
+                    entities: entities,
                 }
             })
             .collect();
         Ok(statements)
     }
 
-    pub async fn persist_statement(&self, statement: &Statement) -> Result<PersistResult, Error> {
-        // lookup entities before creating our own transaction, as we only want to use one transaction at a time
+    async fn try_select_statement(
+        &self,
+        name: &str,
+        entity_1: &str,
+        entity_2: &Option<String>,
+        entity_3: &Option<String>,
+        entity_4: &Option<String>,
+    ) -> Result<Option<Id>, Error> {
+        let mut sql = "select id from statement where name=? and entity_1=?".to_owned();
+        if let Some(_) = entity_2 {
+            sql.push_str(" and entity_2=?");
+        }
+        if let Some(_) = entity_3 {
+            sql.push_str(" and entity_3=?");
+        }
+        if let Some(_) = entity_4 {
+            sql.push_str(" and entity_4=?");
+        }
+        let mut query = sqlx::query_scalar::<DB, Id>(&sql).bind(name).bind(entity_1);
+        if let Some(s) = entity_2 {
+            query = query.bind(s)
+        }
+        if let Some(s) = entity_3 {
+            query = query.bind(s)
+        }
+        if let Some(s) = entity_3 {
+            query = query.bind(s)
+        }
+        Ok(query.fetch_optional(&self.pool).await?)
+    }
 
-        let template_id = self.find_matching_template(statement).await?.id;
-        let mut entity_ids: Vec<Id> = vec![];
-        for entity in &statement.entities {
-            let entity_id = self.persist_entity(entity).await?.id;
-            entity_ids.push(entity_id);
-        }
-        let first_entity_id = entity_ids.remove(0);
-        let mut query_s = "select s.id from statement s".to_string();
-        for (pos, _entity_id) in entity_ids.iter().enumerate() {
-            query_s.push_str(&format!(
-                "
-                join statement_entity e{}
-                on e{}.statement_id=s.id
-                and e{}.position={}
-                and e{}.entity_id=?",
-                pos, pos, pos, pos, pos
-            ));
-        }
-        query_s.push_str(" where s.template_id=? and s.first_entity_id=?");
-        let mut query = sqlx::query(&query_s);
-        for entity_id in &entity_ids {
-            query = query.bind(entity_id);
-        }
-        query = query.bind(template_id).bind(first_entity_id);
-        let result = query
-            .map(|row: SqliteRow| -> Id { row.get::<Id, &str>("id") })
-            .fetch_optional(&self.pool)
+    async fn try_insert_statement(
+        &self,
+        name: &str,
+        entity_1: &str,
+        entity_2: &Option<String>,
+        entity_3: &Option<String>,
+        entity_4: &Option<String>,
+    ) -> Result<Id, Error> {
+        let mut tx = self.pool.begin().await?;
+        let query = sqlx::query::<DB>(
+            "insert into
+            statement(name, entity_1, entity_2, entity_3, entity_4)
+            values(?,?,?,?,?)
+            ",
+        )
+        .bind(name)
+        .bind(entity_1)
+        .bind(entity_2)
+        .bind(entity_3)
+        .bind(entity_4);
+        query.execute(&mut tx).await?;
+        let id = sqlx::query_scalar::<DB, Id>("select last_insert_rowid()")
+            .fetch_one(&mut tx)
             .await?;
-        match result {
-            Some(id) => Ok(PersistResult::old(id)),
-            None => {
-                let mut tx = self.pool.begin().await.unwrap();
-                sqlx::query("insert into statement(template_id,first_entity_id) values(?,?)")
-                    .bind(template_id)
-                    .bind(first_entity_id)
-                    .execute(&mut tx)
-                    .await
-                    .expect("could not insert statement");
-                let id = sqlx::query("select last_insert_rowid()")
-                    .map(|row: SqliteRow| -> Id { row.get::<Id, usize>(0) })
-                    .fetch_one(&mut tx)
-                    .await?;
-                for (pos, entity_id) in entity_ids.iter().enumerate() {
-                    sqlx::query("insert into statement_entity(statement_id, position, entity_id) values(?,?,?)")
-                    .bind(id)
-                    .bind(pos as Id)
-                    .bind(entity_id)
-                    .execute(&mut tx)
-                    .await
-                    .expect("could not insert statement_entity");
-                }
-                tx.commit().await?;
-                Ok(PersistResult::new(id))
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    pub async fn persist_statement(
+        &mut self,
+        statement: &Statement,
+    ) -> Result<PersistResult, Error> {
+        let entity_1 = statement.entities[0].to_string();
+        let entity_2 = statement.entities.get(1).and_then(|e| Some(e.to_string()));
+        let entity_3 = statement.entities.get(2).and_then(|e| Some(e.to_string()));
+        let entity_4 = statement.entities.get(3).and_then(|e| Some(e.to_string()));
+
+        // ensure that the statement matches an existing template
+        if !self.has_matching_template(statement).await {
+            return Err(Error::RowNotFound);
+        }
+
+        // first try to find existing statement
+        let result = self
+            .try_select_statement(&statement.name, &entity_1, &entity_2, &entity_3, &entity_4)
+            .await?;
+        if let Some(id) = result {
+            if let Entity::Template(template) = &statement.entities[0] {
+                self.templates.insert(template.clone());
             }
+            return Ok(PersistResult::old(id));
+        }
+
+        // if not found, try to insert
+        let insert_result = self
+            .try_insert_statement(&statement.name, &entity_1, &entity_2, &entity_3, &entity_4)
+            .await;
+        if let Ok(id) = insert_result {
+            if let Entity::Template(template) = &statement.entities[0] {
+                self.templates.insert(template.clone());
+            }
+            return Ok(PersistResult::new(id));
+        }
+
+        // if insert failed, it's possibly because a concurrent insert happened, so retry select
+        let result = self
+            .try_select_statement(&statement.name, &entity_1, &entity_2, &entity_3, &entity_4)
+            .await?;
+        if let Some(id) = result {
+            return Ok(PersistResult::old(id));
+        }
+
+        // if not there, we might have a real problem on insert, so return that
+        match insert_result {
+            Ok(_) => panic!("can't happen"),
+            Err(e) => Err(e),
         }
     }
 
@@ -389,15 +418,13 @@ impl Storage {
     }
 
     pub async fn persist_opinion(
-        &self,
+        &mut self,
         signed_opinion: &SignedOpinion,
         statement_id: Id,
     ) -> Result<PersistResult, Error> {
         // this actually persists a signed opinion. Raw opinions without signature are only used for temporary purposes.
-        let signer_result = self
-            .persist_entity(&Entity::Signer(signed_opinion.signer.clone()))
-            .await
-            .unwrap();
+        let signer = Statement::signer(Entity::Signer(signed_opinion.signer.clone()));
+        let signer_result = self.persist_statement(&signer).await.unwrap();
         let opinion = &signed_opinion.opinion;
 
         let prev_opinion_result = sqlx::query(
@@ -446,6 +473,23 @@ impl Storage {
         Ok(PersistResult::new(id))
     }
 
+    pub async fn sign_statement_default(
+        &mut self,
+        statement: &Statement,
+        own_key: &OwnKey,
+    ) -> Result<PersistResult, Error> {
+        let opinion = Opinion {
+            date: today(),
+            valid: 30,
+            serial: 0,
+            certainty: 3,
+            comment: "".into(),
+        };
+        let signed_opinion = opinion.sign_using(&statement.signable_bytes(), &own_key.key);
+        let statement_id = self.persist_statement(statement).await?.id;
+        self.persist_opinion(&signed_opinion, statement_id).await
+    }
+
     pub async fn find_statements_about(&self, entity: &Entity) -> Result<Vec<Statement>, Error> {
         // Naive implementation without using sql shortcuts.
         // We can't use map() because that doesn't work with async closures.
@@ -458,35 +502,40 @@ impl Storage {
         Ok(statements)
     }
 
-    pub async fn owner_trust(&self) -> Result<Trust, Error> {
-        if let Ok(row) = sqlx::query("select signer_id, key from trust where level = 0")
-            .fetch_one(&self.pool)
-            .await
+    pub async fn own_key(&mut self) -> Result<OwnKey, Error> {
+        match sqlx::query_as::<DB, (Id, String)>("select signer_id, key from private_key")
+            .fetch_optional(&self.pool)
+            .await?
         {
-            let entity_id = row.get::<Id, usize>(0);
-            let key_bytes = base64::decode(row.get::<String, usize>(1)).expect("base64 decode");
-            let privkey = libp2p::identity::secp256k1::SecretKey::from_bytes(key_bytes)
-                .expect("secp256k1 decode");
-            let signer = self.get_entity(entity_id).await?.unwrap();
-            let keypair = Keypair::Secp256k1(libp2p::identity::secp256k1::Keypair::from(privkey));
-            Ok(Trust {
-                signer: signer,
-                level: 0,
-                key: Some(keypair),
-            })
-        } else {
-            let trust = Trust::new();
-            let persist_result = self.persist_entity(&trust.signer).await?;
-            let privkey = trust.privkey_string();
-            println!("trust {} {}", persist_result.id, privkey);
-            let mut tx = self.pool.begin().await.unwrap();
-            sqlx::query("insert into trust(signer_id, level, key) values(?,0,?)")
-                .bind(persist_result.id)
-                .bind(privkey)
-                .execute(&mut tx)
-                .await?;
-            tx.commit().await?;
-            Ok(trust)
+            Some((id, key)) => {
+                let key_bytes = base64::decode(key).expect("base64 decode");
+                let privkey = libp2p::identity::secp256k1::SecretKey::from_bytes(key_bytes)
+                    .expect("secp256k1 decode");
+                let statement = self.get_statement(id).await?.unwrap();
+                let signer = statement.entities[0].clone();
+                let keypair =
+                    Keypair::Secp256k1(libp2p::identity::secp256k1::Keypair::from(privkey));
+                Ok(OwnKey {
+                    signer: signer,
+                    level: 0,
+                    key: keypair,
+                })
+            }
+            _ => {
+                let own_key = OwnKey::new();
+                let statement = Statement::signer(own_key.signer.clone());
+                let persist_result = self.persist_statement(&statement).await?;
+                let privkey = own_key.privkey_string();
+                println!("trust {} {}", persist_result.id, privkey);
+                let mut tx = self.pool.begin().await.unwrap();
+                sqlx::query("insert into private_key(signer_id, key) values(?,?)")
+                    .bind(persist_result.id)
+                    .bind(privkey)
+                    .execute(&mut tx)
+                    .await?;
+                tx.commit().await?;
+                Ok(own_key)
+            }
         }
     }
 
@@ -502,36 +551,22 @@ impl Storage {
     /* Clean up statements without opinions. */
     pub async fn cleanup_statements(&self) -> Result<(), Error> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("delete from statement_entity where statement_id not in (select statement_id from opinion)")
-            .execute(&mut tx)
-            .await?;
-        sqlx::query("delete from statement where id not in (select statement_id from opinion)")
-            .execute(&mut tx)
-            .await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    /* Cleanup entities not referenced from anywhere */
-    pub async fn cleanup_entities(&self) -> Result<(), Error> {
         sqlx::query(
-            "delete from entity
-                        where id not in
-                            (select template_id from statement
-                            union select first_entity_id from statement
-                            union select entity_id from statement_entity
-                            union select signer_id from opinion
-                            union select signer_id from trust)",
+            "delete from statement
+            where id not in (
+                select statement_id from opinion
+                union select signer_id from opinion
+                union select signer_id from private_key)",
         )
-        .execute(&self.pool)
+        .execute(&mut tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 
     pub async fn cleanup(&self) -> Result<(), Error> {
         self.cleanup_opinions().await?;
-        self.cleanup_statements().await?;
-        self.cleanup_entities().await
+        self.cleanup_statements().await
     }
 }
 
@@ -573,30 +608,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lookup_entity() {
-        let storage = block_on(Storage::new());
-        block_on(storage.initialize_database()).expect("could initialize database");
-        let persist_result =
-            block_on(storage.persist_entity(&Entity::EMail("test@example.com".to_string())))
-                .unwrap();
-        assert!(persist_result.id >= 1);
-    }
-
-    #[test]
-    fn lookup_template() {
-        let storage = block_on(Storage::new());
-        block_on(storage.initialize_database()).expect("could initialize database");
-        let persist_result = block_on(storage.persist_template(&Template {
-            name: "template".into(),
-            entity_types: vec![vec![EntityType::Template]],
-        }))
-        .unwrap();
-        assert!(persist_result.id >= 1);
-    }
-
-    #[test]
     fn lookup_statement() {
-        let storage = block_on(Storage::new());
+        let mut storage = block_on(Storage::new());
         block_on(storage.initialize_database()).expect("could initialize database");
         let statement = Statement::from_str("template(template(Template))").unwrap();
         let persist_result = block_on(storage.persist_statement(&statement)).unwrap();

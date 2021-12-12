@@ -1,5 +1,7 @@
 use std::str::FromStr;
 
+use log::info;
+
 /// functions handling user input (currently simple stdin, will be changed to handle readline and proper output)
 use super::ReputationNet;
 
@@ -22,7 +24,7 @@ impl ReputationNet {
                 .await
             {
                 Ok((persist_result, actual_statement)) => {
-                    println!(
+                    info!(
                         "{} statement {} has id {}",
                         persist_result.wording(),
                         actual_statement,
@@ -32,10 +34,7 @@ impl ReputationNet {
                         .sign_statement(actual_statement, persist_result.id)
                         .await
                         .unwrap();
-                    if persist_result.is_new() {
-                        // we ignore the possible error when no peers are currently connected
-                        self.publish_statement(&signed_statement).await
-                    };
+                    self.publish_statement(&signed_statement).await;
                 }
                 Err(_e) => {
                     println!("No matching template: {}", statement.specific_template());

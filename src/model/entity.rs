@@ -9,7 +9,7 @@ use libp2p::multihash::{Hasher, Sha2_256};
 use super::{template::Template, PublicKey};
 
 // EntityType is used within Templates
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, PartialEq, Debug, Eq, Hash)]
 pub enum EntityType {
     Template = 1,
     Signer = 2,
