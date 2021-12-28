@@ -4,8 +4,13 @@ use std::{
 };
 
 use nom::combinator::all_consuming;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::{entity::Entity, parser, template::{SpecificTemplate, Template}};
+use super::{
+    entity::Entity,
+    parser,
+    template::{SpecificTemplate, Template},
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Statement {
@@ -29,11 +34,7 @@ impl Statement {
     pub fn specific_template(&self) -> SpecificTemplate {
         SpecificTemplate {
             name: self.name.clone(),
-            entity_types: self
-                .entities
-                .iter()
-                .map(|x| x.entity_type())
-                .collect(),
+            entity_types: self.entities.iter().map(|x| x.entity_type()).collect(),
         }
     }
 
@@ -59,8 +60,7 @@ impl Statement {
         }
     }
 
-    #[allow(dead_code)]
-    // return a byte vector for signing
+    /// Return a byte vector for signing
     pub fn signable_bytes(&self) -> Vec<u8> {
         self.to_string().as_bytes().to_vec()
     }
@@ -79,6 +79,29 @@ impl Display for Statement {
             write!(f, "{}", entity)?;
         }
         write!(f, ")")
+    }
+}
+
+impl Serialize for Statement {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Statement {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error;
+        let s: &str = Deserialize::deserialize(deserializer)?;
+        match Statement::from_str(s) {
+            Ok(e) => Ok(e),
+            Err(_) => Err(D::Error::custom("a Statement")),
+        }
     }
 }
 

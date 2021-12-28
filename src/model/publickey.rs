@@ -1,8 +1,10 @@
 use std::{
     fmt::{self, Display, Formatter},
+    hash::{Hash, Hasher},
     str::FromStr,
-    hash::{Hash, Hasher}
 };
+
+use serde::{de::Visitor, Deserialize, Serialize, Serializer};
 
 pub type Signature = Vec<u8>;
 
@@ -10,6 +12,11 @@ pub type Signature = Vec<u8>;
 pub struct PublicKey {
     pub key: libp2p::core::PublicKey,
 }
+
+#[derive(Debug)]
+pub struct InvalidPublicKey;
+
+struct PublicKeyVisitor;
 
 impl Display for PublicKey {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -33,8 +40,6 @@ impl Hash for PublicKey {
     }
 }
 
-#[derive(Debug)]
-pub struct InvalidPublicKey;
 impl fmt::Display for InvalidPublicKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "invalid public key format")
@@ -83,5 +88,41 @@ impl FromStr for PublicKey {
             }),
             _ => Err(InvalidPublicKey),
         }
+    }
+}
+
+impl Serialize for PublicKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Visitor<'de> for PublicKeyVisitor {
+    type Value = PublicKey;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a public key string")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        match Self::Value::from_str(v) {
+            Ok(public_key) => Ok(public_key),
+            Err(e) => Err(E::custom(e.to_string())),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PublicKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(PublicKeyVisitor)
     }
 }

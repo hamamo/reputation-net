@@ -25,22 +25,18 @@ use libp2p::{
     NetworkBehaviour, PeerId,
 };
 
-use super::model::{today, Entity, Opinion, SignedStatement, Statement};
-use super::storage::{Id, Storage};
+use crate::storage::{Repository, PersistResult};
 
-mod requestresponse;
+use super::model::{today, Entity, Opinion, SignedStatement, Statement};
+use super::storage::{Storage};
+
+mod messages;
 mod rpc;
 mod user_input;
-use requestresponse::*;
+pub use messages::*;
 use rpc::*;
 
-/// These are the high level events that are communicated either via gossipsub broadcast, or via direct
-/// communication using the rpc protocol
-#[derive(Debug)]
-pub enum Event {
-    NewStatement(SignedStatement, Option<PeerId>),
-    TemplateRequest(Option<PeerId>),
-}
+pub type NetworkMessageWithPeerId = (NetworkMessage, Option<PeerId>);
 
 #[derive(NetworkBehaviour)]
 #[behaviour(out_event = "OutEvent")]
@@ -53,7 +49,7 @@ pub struct ReputationNet {
     #[behaviour(ignore)]
     storage: Storage,
     #[behaviour(ignore)]
-    event_sender: Sender<Event>,
+    event_sender: Sender<(NetworkMessage, Option<PeerId>)>,
     #[behaviour(ignore)]
     pub local_key: Keypair,
 }
@@ -63,7 +59,7 @@ pub enum OutEvent {
     Mdns(MdnsEvent),
     Gossipsub(GossipsubEvent),
     Ping(PingEvent),
-    Rpc(RequestResponseEvent<RpcRequestResponse, RpcRequestResponse>),
+    Rpc(RequestResponseEvent<NetworkMessage, NetworkMessage>),
 }
 
 impl From<MdnsEvent> for OutEvent {
@@ -84,15 +80,15 @@ impl From<PingEvent> for OutEvent {
     }
 }
 
-impl From<RequestResponseEvent<RpcRequestResponse, RpcRequestResponse>> for OutEvent {
-    fn from(v: RequestResponseEvent<RpcRequestResponse, RpcRequestResponse>) -> Self {
+impl From<RequestResponseEvent<NetworkMessage, NetworkMessage>> for OutEvent {
+    fn from(v: RequestResponseEvent<NetworkMessage, NetworkMessage>) -> Self {
         Self::Rpc(v)
     }
 }
 
 impl ReputationNet {
     #[allow(unused_variables)]
-    pub async fn new(event_sender: Sender<Event>) -> Self {
+    pub async fn new(event_sender: Sender<NetworkMessageWithPeerId>) -> Self {
         let mut storage = Storage::new().await;
         let keypair = storage.own_key().await.expect("could get own key").key;
         let local_peer_id = PeerId::from(keypair.public());
@@ -152,8 +148,7 @@ impl ReputationNet {
 
     pub async fn sign_statement(
         &mut self,
-        statement: Statement,
-        statement_id: Id,
+        statement: PersistResult<Statement>,
     ) -> Option<SignedStatement> {
         let opinion = Opinion {
             date: today(),
@@ -163,65 +158,68 @@ impl ReputationNet {
             comment: "".into(),
         };
         let own_key = self.storage.own_key().await.unwrap();
-        let signed_opinion = opinion.sign_using(&statement.signable_bytes(), &own_key.key);
-        self.storage
-            .persist_opinion(&signed_opinion, statement_id)
+        let signed_opinion = opinion.sign_using(&statement.data.signable_bytes(), &own_key.key);
+        let signed_opinion = self.storage
+            .persist_opinion(signed_opinion, &statement.id)
             .await
             .unwrap();
         Some(SignedStatement {
-            statement: statement,
-            opinions: vec![signed_opinion],
+            statement: statement.data,
+            opinions: vec![signed_opinion.data],
         })
     }
 
-    pub async fn publish_statement(&mut self, signed_statement: &SignedStatement) {
-        match self.gossipsub.publish(
-            self.as_topic(&signed_statement.statement.name),
-            signed_statement.to_string(),
-        ) {
-            Ok(_mid) => info!("published ok"),
+    pub async fn publish_statement(&mut self, signed_statement: SignedStatement) {
+        let topic = self.as_topic(&signed_statement.statement.name);
+        let message = NetworkMessage::Statement(signed_statement);
+        let json = serde_json::to_string(&message).expect("could serialize statement");
+        match self
+            .gossipsub
+            .publish(topic, json)
+        {
+            Ok(mid) => info!("published ok as {:?}", mid),
             Err(err) => info!("could not publish: {:?}", err),
         };
     }
 
-    pub async fn handle_event(&mut self, event: &Event) {
-        info!("got event: {:?}", event);
+    pub async fn handle_event(&mut self, event: NetworkMessage, peer: Option<PeerId>) {
+        info!("got event: {:?} from {:?}", event, peer);
         match event {
-            Event::NewStatement(signed_statement, _peer) => {
-                let statement = &signed_statement.statement;
-                match self.storage.persist_statement(statement).await {
+            NetworkMessage::Statement(signed_statement) => {
+                let statement = signed_statement.statement;
+                match self.storage.persist(statement).await {
                     Ok(persist_result) => {
                         info!(
                             "{} statement {} has id {}",
                             persist_result.wording(),
-                            statement,
+                            persist_result.data,
                             persist_result.id
                         );
-                        for signed_opinion in &signed_statement.opinions {
+                        for signed_opinion in signed_statement.opinions {
                             let result = self
                                 .storage
-                                .persist_opinion(signed_opinion, persist_result.id)
+                                .persist_opinion(signed_opinion, &persist_result.id)
                                 .await
                                 .expect("could insert opinion");
                             info!(
                                 "{} opinion {} has id {}",
                                 result.wording(),
-                                signed_opinion,
+                                result.data,
                                 result.id
                             );
                         }
-                        if persist_result.is_new() && statement.name == "template" {
-                            if let Entity::Template(template) = &statement.entities[0] {
+                        if persist_result.is_new() && persist_result.name == "template" {
+                            if let Entity::Template(template) = &persist_result.entities[0] {
                                 self.gossipsub
                                     .subscribe(&self.as_topic(&template.name))
                                     .unwrap();
                             };
                         }
                     }
-                    Err(e) => error!("No matching template for {}: {:?}", statement, e),
+                    Err(e) => error!("No matching template: {:?}", e),
                 }
             }
-            Event::TemplateRequest(_peer) => {
+            NetworkMessage::TemplateRequest => {
                 let entities = self.storage.list_all_templates().await.unwrap();
                 for entity in entities {
                     let statement = Statement {
@@ -236,9 +234,12 @@ impl ReputationNet {
                             ],
                             statement: statement,
                         };
-                        self.publish_statement(&signed_statement).await;
+                        self.publish_statement(signed_statement).await;
                     }
                 }
+            }
+            _ => {
+                error!("Received unhandled message {:?}", event)
             }
         }
     }
@@ -264,35 +265,26 @@ impl ReputationNet {
                 }
             }
             OutEvent::Gossipsub(GossipsubEvent::Message {
-                propagation_source,
-                message_id,
+                propagation_source: _,
+                message_id: _,
                 message,
             }) => {
                 let string = String::from_utf8_lossy(&message.data);
-                match string.parse::<SignedStatement>() {
-                    Ok(signed_statement) => {
-                        debug!(
-                            "Received: {} from {:?}, id {:?}",
-                            signed_statement, propagation_source, message_id
-                        );
-                        match self.event_sender.try_send(Event::NewStatement(
-                            signed_statement,
-                            message.source.clone(),
-                        )) {
-                            Err(e) => error!("could not send event: {:?}", e),
-                            _ => (),
-                        }
-                    }
-                    Err(e) => {
-                        error!("could not parse {:?}: {:?}", string, e);
-                    }
+                let network_message: NetworkMessage =
+                    serde_json::from_str(&string).expect("network message");
+                match self
+                    .event_sender
+                    .try_send((network_message, message.source))
+                {
+                    Err(e) => error!("could not send event: {:?}", e),
+                    _ => (),
                 }
             }
             OutEvent::Gossipsub(GossipsubEvent::Subscribed { peer_id, topic }) => {
                 if topic.as_str() == "template" {
                     debug!("peer {} wants topics, using broadcast for now", peer_id);
                     self.event_sender
-                        .try_send(Event::TemplateRequest(Some(peer_id)))
+                        .try_send((NetworkMessage::TemplateRequest, Some(peer_id)))
                         .unwrap();
                 }
             }
@@ -302,7 +294,7 @@ impl ReputationNet {
                     request: _,
                     channel,
                 } => {
-                    let response = RpcRequestResponse::Hello("Hi!".into());
+                    let response = NetworkMessage::None;
                     self.rpc.send_response(channel, response).unwrap()
                 }
                 _ => (),

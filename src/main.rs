@@ -5,19 +5,19 @@ use futures::{channel::mpsc, select, AsyncBufReadExt, StreamExt};
 use log::{debug, error, info};
 use std::error::Error;
 
-use libp2p::{multiaddr::Protocol, Multiaddr, Swarm, swarm::SwarmEvent};
+use libp2p::{multiaddr::Protocol, swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
 
 mod model;
 mod reputation_net;
 mod storage;
 
-use reputation_net::{Event, ReputationNet};
+use reputation_net::{NetworkMessage, ReputationNet};
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
     let (mut input_sender, mut input_receiver) = mpsc::channel::<String>(3);
-    let (event_sender, mut event_receiver) = mpsc::channel::<Event>(100);
+    let (event_sender, mut event_receiver) = mpsc::channel::<(NetworkMessage, Option<PeerId>)>(100);
 
     let mut swarm = {
         let behaviour = ReputationNet::new(event_sender).await;
@@ -101,8 +101,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             event = event_receiver.next() => {
                 match event {
                     Some(e) => {
-                        debug!("network event: {:?}", e);
-                        swarm.behaviour_mut().handle_event(&e).await;
+                        let (message, peer) = e;
+                        debug!("network event: {:?}", message);
+                        swarm.behaviour_mut().handle_event(message, peer).await;
                     }
                     None => panic!("end of network?")
                 }

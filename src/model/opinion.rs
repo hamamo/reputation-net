@@ -1,7 +1,10 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::num::ParseIntError;
+use std::ops::Deref;
 use std::str::FromStr;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{percent_decode, percent_encode, Keypair, PublicKey, Signature, Statement};
 
@@ -14,7 +17,7 @@ pub struct Opinion {
     pub comment: String, // optional comment, may be empty
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SignedOpinion {
     pub opinion: Opinion,
     pub signer: PublicKey,
@@ -22,7 +25,7 @@ pub struct SignedOpinion {
 }
 
 // SignedStatement is actually a list of signed opinions about a single statement
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SignedStatement {
     pub statement: Statement,
     pub opinions: Vec<SignedOpinion>,
@@ -41,6 +44,10 @@ impl Opinion {
             },
             signature: signature,
         }
+    }
+
+    pub fn last_date(&self) -> u32 {
+        self.date + self.valid as u32
     }
 
     fn signable_bytes(&self, statement_bytes: &Vec<u8>) -> Vec<u8> {
@@ -161,6 +168,36 @@ impl FromStr for SignedOpinion {
             signature: base64::decode(parts[6]).unwrap(),
         };
         Ok(result)
+    }
+}
+
+impl Serialize for SignedOpinion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for SignedOpinion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error;
+        let s: &str = Deserialize::deserialize(deserializer)?;
+        match SignedOpinion::from_str(s) {
+            Ok(e) => Ok(e),
+            Err(_) => Err(D::Error::custom("a SignedOpinion")),
+        }
+    }
+}
+
+impl Deref for SignedOpinion {
+    type Target = Opinion;
+    fn deref(&self) -> &Self::Target {
+        &self.opinion
     }
 }
 

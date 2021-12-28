@@ -5,7 +5,7 @@ use futures::{AsyncRead, AsyncWrite};
 use libp2p::request_response::*;
 use libp2p::core::upgrade::{read_length_prefixed,write_length_prefixed};
 
-use super::requestresponse::*;
+use super::messages::*;
 
 #[derive(Debug, Clone)]
 pub struct RpcCodec {}
@@ -25,8 +25,8 @@ impl ProtocolName for RpcProtocol{
 #[async_trait]
 impl RequestResponseCodec for RpcCodec {
     type Protocol = RpcProtocol;
-    type Request = RpcRequestResponse;
-    type Response = RpcRequestResponse;
+    type Request = NetworkMessage;
+    type Response = NetworkMessage;
 
     async fn read_request<T>(
         &mut self,

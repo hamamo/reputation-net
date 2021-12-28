@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 use cidr::{Ipv4Cidr, Ipv6Cidr};
 use libp2p::multihash::{Hasher, Sha2_256};
+use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{template::Template, PublicKey};
 
@@ -21,6 +22,39 @@ pub enum EntityType {
     IPv6 = 8,
     Url = 9,
 }
+
+#[derive(Debug)]
+pub struct InvalidEntityType;
+
+#[derive(Debug)]
+pub struct InvalidEntity;
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum Entity {
+    Domain(String),    // denotes a domain name
+    EMail(String),     // denotes an e-mail address (localpart@domain)
+    AS(u32),           // denotes an autonomous system
+    IPv4(Ipv4Cidr),    // denotes an IPv4 address or address range
+    IPv6(Ipv6Cidr),    // denotes an IPv4 address or address range
+    Signer(PublicKey), // denotes a signer
+    #[allow(dead_code)]
+    Url(String), // denotes an URL, for example a contact form
+    HashValue(String), // hash of an e-mail or other data. may be used to cloak user data, or to secure URL contents
+    Template(Template), // statement template to dynamically add new statement types
+}
+
+impl Display for InvalidEntityType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "invalid entity type")
+    }
+}
+impl Display for InvalidEntity {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "invalid entity format")
+    }
+}
+
+impl std::error::Error for InvalidEntity {}
 
 impl Display for EntityType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -42,14 +76,6 @@ impl Display for EntityType {
     }
 }
 
-#[derive(Debug)]
-pub struct InvalidEntityType;
-impl Display for InvalidEntityType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "invalid entity type")
-    }
-}
-
 impl FromStr for EntityType {
     type Err = InvalidEntityType;
     fn from_str(string: &str) -> Result<Self, InvalidEntityType> {
@@ -65,29 +91,6 @@ impl FromStr for EntityType {
             _ => return Err(InvalidEntityType),
         };
         Ok(x)
-    }
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub enum Entity {
-    Domain(String),      // denotes a domain name
-    EMail(String),       // denotes an e-mail address (localpart@domain)
-    AS(u32),             // denotes an autonomous system
-    IPv4(Ipv4Cidr),      // denotes an IPv4 address or address range
-    IPv6(Ipv6Cidr),      // denotes an IPv4 address or address range
-    Signer(PublicKey),   // denotes a signer
-    #[allow(dead_code)]
-    Url(String),         // denotes an URL, for example a contact form
-    HashValue(String),   // hash of an e-mail or other data. may be used to cloak user data, or to secure URL contents
-    Template(Template),  // statement template to dynamically add new statement types
-}
-
-// an error type
-#[derive(Debug)]
-pub struct InvalidEntity;
-impl Display for InvalidEntity {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "invalid entity format")
     }
 }
 
@@ -115,7 +118,7 @@ impl Entity {
     pub fn hash_emails(&self) -> Self {
         match self {
             Self::EMail(x) => Self::hash_string(x),
-            _ => self.clone()
+            _ => self.clone(),
         }
     }
 
@@ -123,17 +126,17 @@ impl Entity {
         match self {
             Self::EMail(address) => {
                 let at_index = address.find("@").unwrap();
-                Some(Self::Domain(address[at_index+1..].into()))
+                Some(Self::Domain(address[at_index + 1..].into()))
             }
             Self::Domain(domain) => {
                 let dot_index = domain.find(".");
                 match dot_index {
                     None => None,
                     Some(n) => {
-                        if n == domain.len()-1 {
+                        if n == domain.len() - 1 {
                             None
                         } else {
-                            let mut super_domain = domain[n+1..].to_string();
+                            let mut super_domain = domain[n + 1..].to_string();
                             if let None = super_domain.find(".") {
                                 super_domain.push_str(".");
                             }
@@ -142,7 +145,7 @@ impl Entity {
                     }
                 }
             }
-            _ => None
+            _ => None,
         }
     }
 
@@ -158,11 +161,32 @@ impl Entity {
             Self::Domain(_) => {
                 let mut result = vec![self.clone()];
                 if let Some(super_domain) = self.domain() {
-                     result.append(&mut super_domain.all_lookup_keys())
+                    result.append(&mut super_domain.all_lookup_keys())
                 }
                 result
             }
-            _ => vec![self.clone()]
+            _ => vec![self.clone()],
+        }
+    }
+
+    /// Return a pair of cidr_min and cidr_max strings for database indexing
+    pub fn cidr_minmax(&self) -> (Option<String>, Option<String>) {
+        match self {
+            Entity::IPv4(cidr) => {
+                let min = cidr.first_address().octets();
+                let max = cidr.last_address().octets();
+                (
+                    Some(format!(
+                        "{:02X}{:02X}{:02X}{:02X}",
+                        min[0], min[1], min[2], min[3]
+                    )),
+                    Some(format!(
+                        "{:02X}{:02X}{:02X}{:02X}",
+                        max[0], max[1], max[2], max[3]
+                    )),
+                )
+            }
+            _ => (None, None),
         }
     }
 }
@@ -189,6 +213,28 @@ impl FromStr for Entity {
         match nom::combinator::all_consuming(super::parser::entity)(string) {
             Ok((_, entity)) => Ok(entity),
             _ => Err(InvalidEntity {}),
+        }
+    }
+}
+
+impl Serialize for Entity {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Entity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s: &str = Deserialize::deserialize(deserializer)?;
+        match Entity::from_str(s) {
+            Ok(e) => Ok(e),
+            Err(_) => Err(D::Error::custom("an Entity")),
         }
     }
 }
@@ -256,10 +302,7 @@ mod tests {
         let keypair = super::super::tests::example_keypair();
         let pk = keypair.public();
         let signer = Entity::Signer(super::super::publickey::PublicKey { key: pk });
-        assert_eq!(
-            signer.to_string(),
-            super::super::tests::example_signer()
-        );
+        assert_eq!(signer.to_string(), super::super::tests::example_signer());
     }
     #[test]
     fn domain_lookup_keys() {
