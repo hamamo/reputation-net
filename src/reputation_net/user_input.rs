@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::str::FromStr;
+use std::time::Instant;
 
 #[allow(unused_imports)]
 use log::info;
@@ -57,11 +58,18 @@ impl ReputationNet {
     }
 
     async fn local_command(&mut self, command: &str) {
-        match command {
+        let words = command.split_ascii_whitespace().collect::<Vec<_>>();
+        if words.len() == 0 {
+            return;
+        }
+        match words[0] {
             "fix-cidr" => {
                 if let Err(e) = self.storage.fix_cidr().await {
                     println!("error: {:?}", e);
                 }
+            }
+            "announce" => {
+
             }
             _ => println!("unknown command: {}", command),
         }
@@ -69,7 +77,10 @@ impl ReputationNet {
 
     async fn local_query(&mut self, query: &str) -> Result<(), Box<dyn Error>> {
         let entity = Entity::from_str(query)?;
+        let instant = Instant::now();
         let statements = self.storage.find_statements_about(&entity).await?;
+        let duration = instant.elapsed();
+        println!("Execution time: {:?}", duration);
         if statements.len() == 0 {
             println!("No matches");
         }

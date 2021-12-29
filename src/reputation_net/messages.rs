@@ -9,7 +9,7 @@ use crate::model::{SignedStatement, Date};
 pub enum NetworkMessage {
     None,
     TemplateRequest,
-    Announcement(Announcement),
+    Announcement(Date, Vec<Announcement>),
     OpinionRequest(OpinionRequest),
     Statement(SignedStatement),
 }
@@ -17,7 +17,6 @@ pub enum NetworkMessage {
 #[derive(Debug,Serialize,Deserialize)]
 pub struct Announcement {
     name: String,
-    date: Date,
     count: u32,
     hash: String,
 }
