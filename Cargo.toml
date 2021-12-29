@@ -8,7 +8,7 @@ edition = "2021"
 
 [dependencies]
 # libp2p = { git = "https://github.com/libp2p/rust-libp2p.git" }
-libp2p = "0.40"
+libp2p = "0.41"
 futures = "*"
 cidr = "*"
 sha2 = "*"
@@ -20,7 +20,7 @@ once_cell = "*"
 libsqlite3-sys = "*"
 sqlx = { version = "*", features = ["runtime-async-std-rustls", "sqlite"] }
 percent-encoding = "*"
-nom = "7.0"
+nom = "7"
 env_logger = "*"
 log = "*"
 serde = "*"

@@ -46,8 +46,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Dial the peer identified by the multi-address given as the second
     // command-line argument, if any.
     if let Some(addr) = std::env::args().nth(1) {
-        let remote = addr.parse()?;
-        swarm.dial_addr(remote)?;
+        let remote: Multiaddr = addr.parse()?;
+        swarm.dial(remote)?;
         info!("Dialing {}", addr)
     }
 
