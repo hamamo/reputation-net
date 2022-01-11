@@ -1,7 +1,7 @@
 // store entities, statements, opinions persistently
 use std::{collections::HashMap, str::FromStr};
 
-use async_trait::async_trait;
+use itertools::Itertools;
 use libp2p::identity::Keypair;
 
 // library imports
@@ -11,22 +11,26 @@ use sqlx::{
 };
 
 // own imports
-use crate::model::{today, Entity, Opinion, OwnKey, PublicKey, SignedOpinion, Statement, Template};
+use crate::model::{Date, Entity, Opinion, OwnKey, PublicKey, SignedOpinion, Statement, Template};
 
 mod repository;
 pub use repository::*;
+mod statement;
+mod sync_info;
+pub use sync_info::*;
 
 const DATABASE_URL: &str = "sqlite:reputation.sqlite3?mode=rwc";
 
 /// The database type, currently only Sqlite
 pub type DB = Sqlite;
 
-/// The storage menchanism for all data shared via the net.
+/// The storage mechanism for all data shared via the net.
 /// Currently does not include caches.
 pub struct Storage {
     pool: SqlitePool,
     templates: HashMap<Id<Statement>, Template>,
     signers: HashMap<Id<Statement>, PublicKey>,
+    own_key: OwnKey,
 }
 
 impl Storage {
@@ -43,6 +47,7 @@ impl Storage {
                 .unwrap(),
             templates: HashMap::new(),
             signers: HashMap::new(),
+            own_key: OwnKey::new()
         };
         db.initialize_database().await.expect("could initialize");
         db.cleanup().await.expect("could cleanup");
@@ -66,9 +71,10 @@ impl Storage {
         let signer_statement = self.persist(signer_statement).await?;
 
         // make sure an owner trust entry exists
-        let own_key = self.own_key().await?;
+        self.ensure_own_key().await?;
 
         // sign the predefined statements with it
+        let own_key = self.own_key.clone();
         self.sign_statement_default(template_statement.data, &own_key)
             .await?;
         self.sign_statement_default(signer_statement.data, &own_key)
@@ -221,7 +227,7 @@ impl Storage {
         &self,
         id: Id<Statement>,
     ) -> Result<Vec<Persistent<SignedOpinion>>, Error> {
-        let rows = sqlx::query_as::<DB, (PrimitiveId, PrimitiveId, u32, u16, u8, i8, String)>(
+        let rows = sqlx::query_as::<DB, (PrimitiveId, PrimitiveId, Date, u16, u8, i8, String)>(
             "select
                     id,
                     signer_id,
@@ -245,7 +251,7 @@ impl Storage {
                     let signer = self.signers.get(&Id::new(*signer_id)).unwrap().clone();
                     let opinion = SignedOpinion {
                         opinion: Opinion {
-                            date: *date,
+                            date: date.clone(),
                             valid: *valid,
                             serial: *serial,
                             certainty: *certainty,
@@ -356,7 +362,7 @@ impl Storage {
         let signer_result = self.persist(signer).await.unwrap();
         let opinion = &signed_opinion.opinion;
 
-        let prev_opinion_result = sqlx::query_as::<DB, (PrimitiveId, u32, u8)>(
+        let prev_opinion_result = sqlx::query_as::<DB, (PrimitiveId, Date, u8)>(
             "select id,date,serial from opinion where statement_id = ? and signer_id = ?",
         )
         .bind(statement_id.id)
@@ -401,7 +407,7 @@ impl Storage {
         own_key: &OwnKey,
     ) -> Result<PersistResult<SignedOpinion>, Error> {
         let opinion = Opinion {
-            date: today(),
+            date: Date::today(),
             valid: 30,
             serial: 0,
             certainty: 3,
@@ -441,8 +447,8 @@ impl Storage {
         Ok(statements)
     }
 
-    pub async fn own_key(&mut self) -> Result<OwnKey, Error> {
-        match sqlx::query_as::<DB, (PrimitiveId, String)>("select signer_id, key from private_key")
+    pub async fn ensure_own_key(&mut self) -> Result<(), Error> {
+        self.own_key = match sqlx::query_as::<DB, (PrimitiveId, String)>("select signer_id, key from private_key")
             .fetch_optional(&self.pool)
             .await?
         {
@@ -454,11 +460,11 @@ impl Storage {
                 let signer = statement.entities[0].clone();
                 let keypair =
                     Keypair::Secp256k1(libp2p::identity::secp256k1::Keypair::from(privkey));
-                Ok(OwnKey {
+                OwnKey {
                     signer: signer,
                     level: 0,
                     key: keypair,
-                })
+                }
             }
             _ => {
                 let own_key = OwnKey::new();
@@ -473,15 +479,20 @@ impl Storage {
                     .execute(&mut tx)
                     .await?;
                 tx.commit().await?;
-                Ok(own_key)
+                own_key
             }
-        }
+        };
+        Ok(())
+    }
+
+    pub fn own_key<'a>(&'a self) -> &'a OwnKey {
+        &self.own_key
     }
 
     /* Clean up opinions which are not valid anymore. */
     pub async fn cleanup_opinions(&self) -> Result<(), Error> {
         sqlx::query("delete from opinion where date + valid < ?")
-            .bind(today())
+            .bind(Date::today())
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -508,155 +519,43 @@ impl Storage {
         self.cleanup_statements().await
     }
 
+    /// utility method to fix the cidr database columns, to be used if there are old IP entries
     pub async fn fix_cidr(&self) -> Result<(), Error> {
         for s in self.get_all().await? {
             let (cidr_min, cidr_max) = s.entities[0].cidr_minmax();
             if let Some(cidr_min) = cidr_min {
                 sqlx::query("update statement set cidr_min=?, cidr_max=? where id=?")
-                .bind(cidr_min)
-                .bind(cidr_max)
-                .bind(s.id.id)
-                .execute(&self.pool)
-                .await?;
+                    .bind(cidr_min)
+                    .bind(cidr_max)
+                    .bind(s.id.id)
+                    .execute(&self.pool)
+                    .await?;
             }
         }
         Ok(())
     }
-}
 
-#[async_trait]
-impl Repository<Statement> for Storage {
-    type RowType = (
-        PrimitiveId,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    );
-
-    async fn get(&self, id: Id<Statement>) -> Result<Option<Persistent<Statement>>, Error> {
-        match sqlx::query_as::<DB, Self::RowType>(
-            "select
-                    id,
-                    name,
-                    entity_1,
-                    entity_2,
-                    entity_3,
-                    entity_4
-                from
-                    statement
-                where
-                    id = ?",
+    pub async fn get_sync_infos(&self, date: Date) -> Result<SyncInfos, Error> {
+        let rows = sqlx::query_as::<DB, (String, String)>(
+            "select s.name, o.signature
+            from statement s join opinion o on s.id = o.statement_id
+            where o.date=?
+            order by s.name, o.signature",
         )
-        .bind(id.id)
-        .fetch_one(&self.pool)
-        .await
-        {
-            Ok(tuple) => {
-                return Ok(Some(Self::row_to_record(tuple)));
-            }
-            _ => Ok(None),
-        }
-    }
-
-    async fn get_all(&self) -> Result<Vec<Persistent<Statement>>, Error> {
-        // dummy implementation for now
-        let rows = sqlx::query_as::<DB, Self::RowType>(
-            "select
-                    id,
-                    name,
-                    entity_1,
-                    entity_2,
-                    entity_3,
-                    entity_4
-                from
-                    statement",
-        )
+        .bind(date)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .into_iter()
-            .map(|tuple| Self::row_to_record(tuple))
-            .collect())
-    }
-
-    async fn persist(&mut self, statement: Statement) -> Result<PersistResult<Statement>, Error> {
-        // ensure that the statement matches an existing template
-        if !self.has_matching_template(&statement) {
-            println!("did not find matching template for {}", statement);
-            return Err(Error::RowNotFound);
-        }
-
-        let entity_1 = statement.entities[0].to_string();
-        let (cidr_min, cidr_max) = statement.entities[0].cidr_minmax();
-        let entity_2 = statement.entities.get(1).and_then(|e| Some(e.to_string()));
-        let entity_3 = statement.entities.get(2).and_then(|e| Some(e.to_string()));
-        let entity_4 = statement.entities.get(3).and_then(|e| Some(e.to_string()));
-
-        // first try to find existing statement
-        let result = self
-            .try_select_statement(&statement.name, &entity_1, &entity_2, &entity_3, &entity_4)
-            .await?;
-
-        let result = match result {
-            Some(id) => PersistResult::old(id, statement),
-            None => {
-                let insert_result = self
-                    .try_insert_statement(
-                        &statement.name,
-                        &entity_1,
-                        &entity_2,
-                        &entity_3,
-                        &entity_4,
-                        &cidr_min,
-                        &cidr_max,
-                    )
-                    .await;
-                match insert_result {
-                    Ok(id) => PersistResult::new(id, statement),
-                    Err(_) => {
-                        let result = self
-                            .try_select_statement(
-                                &statement.name,
-                                &entity_1,
-                                &entity_2,
-                                &entity_3,
-                                &entity_4,
-                            )
-                            .await?;
-                        match result {
-                            Some(id) => PersistResult::old(id, statement),
-                            None => panic!("could not insert statement"),
-                        }
-                    }
-                }
-            }
+        let mut result = SyncInfos {
+            date,
+            infos: HashMap::new(),
         };
-        if result.name == "template" {
-            if let Entity::Template(template) = &result.entities[0] {
-                self.templates.insert(result.id.clone(), template.clone());
-            }
+        for (name, hash_strings) in &rows.into_iter().group_by(|tuple| tuple.0.to_string()) {
+            let hashes: Vec<Vec<u8>> = hash_strings
+                .map(|tuple| base64::decode(tuple.1).unwrap())
+                .collect();
+            result.infos.insert(name, SyncInfo::new(hashes));
         }
         Ok(result)
-    }
-
-    fn row_to_record(row: Self::RowType) -> Persistent<Statement> {
-        let (id, name, entity_1, entity_2, entity_3, entity_4) = row;
-        let mut entities = vec![Entity::from_str(&entity_1.as_str()).unwrap()];
-        if let Some(entity) = entity_2 {
-            entities.push(Entity::from_str(&entity.as_str()).unwrap())
-        }
-        if let Some(entity) = entity_3 {
-            entities.push(Entity::from_str(&entity.as_str()).unwrap())
-        }
-        if let Some(entity) = entity_4 {
-            entities.push(Entity::from_str(&entity.as_str()).unwrap())
-        }
-        Persistent {
-            id: Id::new(id),
-            data: Statement { name, entities },
-        }
     }
 }
 

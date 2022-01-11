@@ -1,0 +1,8 @@
+[envelope]
+helo = "spammer"
+mail.value = ["spammer", "exploited"]
+mail.domain.ns = "spammer_friendly"
+
+[body]
+from = ["spammer", "exploited"]
+reply-to = "spammer"

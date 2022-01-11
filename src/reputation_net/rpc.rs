@@ -1,6 +1,5 @@
 use async_std::io::{Result};
 use async_trait::async_trait;
-use futures::{AsyncRead, AsyncWrite};
 
 use libp2p::request_response::*;
 use libp2p::core::upgrade::{read_length_prefixed,write_length_prefixed};
@@ -34,7 +33,7 @@ impl RequestResponseCodec for RpcCodec {
         io: &mut T,
     ) -> Result<Self::Request>
     where
-        T: AsyncRead + Unpin + Send,
+        T: futures::AsyncRead + Unpin + Send,
     {
         let data = read_length_prefixed(io, 1000).await?;
         let request = serde_json::from_slice(&data)?;
@@ -47,7 +46,7 @@ impl RequestResponseCodec for RpcCodec {
         io: &mut T,
     ) -> Result<Self::Response>
     where
-        T: AsyncRead + Unpin + Send,
+        T: futures::AsyncRead + Unpin + Send,
     {
         let data = read_length_prefixed(io, 20000).await?;
         let response = serde_json::from_slice(&data)?;
@@ -61,7 +60,7 @@ impl RequestResponseCodec for RpcCodec {
         req: Self::Request,
     ) -> Result<()>
     where
-        T: AsyncWrite + Unpin + Send,
+        T: futures::AsyncWrite + Unpin + Send,
     {
         let json_data = serde_json::to_vec(&req).unwrap();
         write_length_prefixed(io, &json_data).await
@@ -74,7 +73,7 @@ impl RequestResponseCodec for RpcCodec {
         res: Self::Response,
     ) -> Result<()>
     where
-        T: AsyncWrite + Unpin + Send,
+        T: futures::AsyncWrite + Unpin + Send,
     {
         let json_data = serde_json::to_vec(&res).unwrap();
         write_length_prefixed(io, &json_data).await

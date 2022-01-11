@@ -1,6 +1,4 @@
-use std::fmt;
-use std::fmt::Display;
-use std::fmt::Formatter;
+use std::fmt::{self, Display, Formatter, Write};
 use std::str::FromStr;
 
 use cidr::{Ipv4Cidr, Ipv6Cidr};
@@ -175,16 +173,28 @@ impl Entity {
             Entity::IPv4(cidr) => {
                 let min = cidr.first_address().octets();
                 let max = cidr.last_address().octets();
-                (
-                    Some(format!(
-                        "{:02X}{:02X}{:02X}{:02X}",
-                        min[0], min[1], min[2], min[3]
-                    )),
-                    Some(format!(
-                        "{:02X}{:02X}{:02X}{:02X}",
-                        max[0], max[1], max[2], max[3]
-                    )),
-                )
+                let mut min_str = "4:".to_string();
+                for b in min {
+                    write!(&mut min_str, "{:02X}", b).unwrap()
+                }
+                let mut max_str = "4:".to_string();
+                for b in max {
+                    write!(&mut max_str, "{:02X}", b).unwrap()
+                }
+                (Some(min_str), Some(max_str))
+            }
+            Entity::IPv6(cidr) => {
+                let min = cidr.first_address().octets();
+                let max = cidr.last_address().octets();
+                let mut min_str = "6:".to_string();
+                for b in min {
+                    write!(&mut min_str, "{:02X}", b).unwrap()
+                }
+                let mut max_str = "6:".to_string();
+                for b in max {
+                    write!(&mut max_str, "{:02X}", b).unwrap()
+                }
+                (Some(min_str), Some(max_str))
             }
             _ => (None, None),
         }

@@ -6,11 +6,11 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::{percent_decode, percent_encode, Keypair, PublicKey, Signature, Statement};
+use super::{percent_decode, percent_encode, Keypair, PublicKey, Signature, Statement, Date};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Opinion {
-    pub date: u32,       // day since the UNIX epoch
+    pub date: Date,       // day since the UNIX epoch
     pub valid: u16,      // number of days this opinion is considered valid
     pub serial: u8, // to detect most recent opinion about a statement if more than one are made on one day
     pub certainty: i8, // positive or negative certainty in range -3..3.
@@ -46,8 +46,8 @@ impl Opinion {
         }
     }
 
-    pub fn last_date(&self) -> u32 {
-        self.date + self.valid as u32
+    pub fn last_date(&self) -> Date {
+        self.date + self.valid
     }
 
     fn signable_bytes(&self, statement_bytes: &Vec<u8>) -> Vec<u8> {
@@ -60,7 +60,7 @@ impl Opinion {
 impl Default for Opinion {
     fn default() -> Self {
         Self {
-            date: today(),
+            date: Date::today(),
             valid: 7,
             serial: 0,
             certainty: 3,
@@ -74,7 +74,7 @@ impl Display for Opinion {
         write!(
             f,
             "{};{};{};{};{}",
-            self.date,
+            self.date.d,
             self.valid,
             self.serial,
             self.certainty,
@@ -112,8 +112,9 @@ impl FromStr for Opinion {
                 cause: format!("opinion should have 5 parts, this has {}", parts.len()),
             });
         }
+        let d: u32 = parts[0].parse()?;
         let result = Self {
-            date: parts[0].parse()?,
+            date: Date::from(d),
             valid: parts[1].parse()?,
             serial: parts[2].parse()?,
             certainty: parts[3].parse()?,
@@ -155,8 +156,9 @@ impl FromStr for SignedOpinion {
                 ),
             });
         }
+        let d: u32 = parts[0].parse()?;
         let opinion = Opinion {
-            date: parts[0].parse()?,
+            date: Date::from(d),
             valid: parts[1].parse()?,
             serial: parts[2].parse()?,
             certainty: parts[3].parse()?,
@@ -247,17 +249,13 @@ impl FromStr for SignedStatement {
     }
 }
 
-pub fn today() -> u32 {
-    (chrono::offset::Utc::now().timestamp() / 86400) as u32
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn example() -> Opinion {
         Opinion {
-            date: 18924, // 2021-10-24
+            date: Date::from(18924), // 2021-10-24
             valid: 7,
             serial: 0,
             certainty: 3,

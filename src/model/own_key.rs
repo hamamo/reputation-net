@@ -2,6 +2,7 @@ use libp2p::identity::{Keypair};
 
 use super::{Entity, PublicKey};
 
+#[derive(Clone)]
 pub struct OwnKey {
     pub signer: Entity,
     pub level: u8,

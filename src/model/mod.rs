@@ -11,7 +11,7 @@ mod template;
 mod own_key;
 mod date;
 pub use entity::{Entity, EntityType};
-pub use opinion::{Opinion,SignedOpinion,SignedStatement,today};
+pub use opinion::{Opinion,SignedOpinion,SignedStatement};
 pub use publickey::{PublicKey, Signature};
 pub use statement::Statement;
 pub use template::Template;

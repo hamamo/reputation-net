@@ -29,11 +29,13 @@ impl ReputationNet {
         match what.parse::<Statement>() {
             Ok(statement) => {
                 let template = statement.specific_template();
-                match self
+                let result = self
                     .storage
-                    .persist_statement_hashing_emails(statement)
+                    .write()
                     .await
-                {
+                    .persist_statement_hashing_emails(statement)
+                    .await;
+                match result {
                     Ok(actual_statement) => {
                         println!(
                             "{} statement {} has id {}",
@@ -47,7 +49,14 @@ impl ReputationNet {
                     Err(_e) => {
                         println!("No matching template: {}", template);
                         println!("Available:");
-                        for t in self.storage.list_templates(&template.name).await.iter() {
+                        for t in self
+                            .storage
+                            .read()
+                            .await
+                            .list_templates(&template.name)
+                            .await
+                            .iter()
+                        {
                             println!("  {:?}", t)
                         }
                     }
@@ -64,12 +73,33 @@ impl ReputationNet {
         }
         match words[0] {
             "fix-cidr" => {
-                if let Err(e) = self.storage.fix_cidr().await {
+                if let Err(e) = self.storage.write().await.fix_cidr().await {
                     println!("error: {:?}", e);
                 }
             }
-            "announce" => {
-
+            "sync" => {
+                let date = if words.len() > 1 {
+                    match Date::from_str(words[1]) {
+                        Ok(d) => d,
+                        _ => match u32::from_str(words[1]) {
+                            Ok(u) => Date::from(u),
+                            _ => {
+                                println!("could not parse date: {}", words[1]);
+                                Date::today()
+                            }
+                        },
+                    }
+                } else {
+                    Date::today()
+                };
+                let sync_infos = self
+                    .storage
+                    .read()
+                    .await
+                    .get_sync_infos(date)
+                    .await
+                    .expect("sync infos");
+                println!("{:?}", sync_infos);
             }
             _ => println!("unknown command: {}", command),
         }
@@ -78,7 +108,12 @@ impl ReputationNet {
     async fn local_query(&mut self, query: &str) -> Result<(), Box<dyn Error>> {
         let entity = Entity::from_str(query)?;
         let instant = Instant::now();
-        let statements = self.storage.find_statements_about(&entity).await?;
+        let statements = self
+            .storage
+            .read()
+            .await
+            .find_statements_about(&entity)
+            .await?;
         let duration = instant.elapsed();
         println!("Execution time: {:?}", duration);
         if statements.len() == 0 {
@@ -86,14 +121,19 @@ impl ReputationNet {
         }
         for statement in statements {
             println!("{}: {}", statement.id, statement.data);
-            let opinions = self.storage.list_opinions_on(statement.id).await?;
+            let opinions = self
+                .storage
+                .read()
+                .await
+                .list_opinions_on(statement.id)
+                .await?;
             for opinion in opinions {
                 let data = &opinion.data;
                 println!(
                     "  {}: {}..{}{} {} {}",
                     opinion.id,
-                    Date::from(data.date),
-                    Date::from(data.last_date()),
+                    data.date,
+                    data.last_date(),
                     (if data.serial > 0 {
                         format!(".{}", data.serial)
                     } else {

@@ -1,7 +1,8 @@
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, time::Duration, sync::Arc};
+
+use async_std::{sync::RwLock};
 
 use futures::channel::mpsc::Sender;
-
 use libp2p::request_response::{ProtocolSupport, RequestResponseMessage};
 use log::{debug, error, info};
 
@@ -25,10 +26,13 @@ use libp2p::{
     NetworkBehaviour, PeerId,
 };
 
-use crate::storage::{Repository, PersistResult};
+use crate::{
+    model::Date,
+    storage::{PersistResult, Repository},
+};
 
-use super::model::{today, Entity, Opinion, SignedStatement, Statement};
-use super::storage::{Storage};
+use super::model::{Entity, Opinion, SignedStatement, Statement};
+use super::storage::Storage;
 
 mod messages;
 mod rpc;
@@ -47,7 +51,7 @@ pub struct ReputationNet {
     rpc: RequestResponse<RpcCodec>,
 
     #[behaviour(ignore)]
-    storage: Storage,
+    pub storage: Arc<RwLock<Storage>>,
     #[behaviour(ignore)]
     event_sender: Sender<(NetworkMessage, Option<PeerId>)>,
     #[behaviour(ignore)]
@@ -89,8 +93,8 @@ impl From<RequestResponseEvent<NetworkMessage, NetworkMessage>> for OutEvent {
 impl ReputationNet {
     #[allow(unused_variables)]
     pub async fn new(event_sender: Sender<NetworkMessageWithPeerId>) -> Self {
-        let mut storage = Storage::new().await;
-        let keypair = storage.own_key().await.expect("could get own key").key;
+        let storage = Storage::new().await;
+        let keypair = storage.own_key().key.clone();
         let local_peer_id = PeerId::from(keypair.public());
         #[allow(unused_mut)]
         let mut repnet = Self {
@@ -110,9 +114,9 @@ impl ReputationNet {
                 vec![(RpcProtocol::Version1, ProtocolSupport::Full)].into_iter(),
                 RequestResponseConfig::default(),
             ),
-            storage: storage,
+            storage: Arc::new(RwLock::new(storage)),
             event_sender: event_sender,
-            local_key: keypair,
+            local_key: keypair.clone(),
         };
         for t in repnet.topics().await {
             repnet
@@ -132,7 +136,7 @@ impl ReputationNet {
     }
 
     pub async fn topics(&self) -> Vec<String> {
-        match self.storage.list_all_templates().await {
+        match self.storage.read().await.list_all_templates().await {
             Ok(templates) => templates
                 .into_iter()
                 .map(|entity| match entity {
@@ -151,15 +155,16 @@ impl ReputationNet {
         statement: PersistResult<Statement>,
     ) -> Option<SignedStatement> {
         let opinion = Opinion {
-            date: today(),
+            date: Date::today(),
             valid: 30,
             serial: 0,
             certainty: 3,
             comment: "".into(),
         };
-        let own_key = self.storage.own_key().await.unwrap();
+        let mut storage = self.storage.write().await;
+        let own_key = storage.own_key();
         let signed_opinion = opinion.sign_using(&statement.data.signable_bytes(), &own_key.key);
-        let signed_opinion = self.storage
+        let signed_opinion = storage
             .persist_opinion(signed_opinion, &statement.id)
             .await
             .unwrap();
@@ -173,21 +178,19 @@ impl ReputationNet {
         let topic = self.as_topic(&signed_statement.statement.name);
         let message = NetworkMessage::Statement(signed_statement);
         let json = serde_json::to_string(&message).expect("could serialize statement");
-        match self
-            .gossipsub
-            .publish(topic, json)
-        {
+        match self.gossipsub.publish(topic, json) {
             Ok(mid) => info!("published ok as {:?}", mid),
             Err(err) => info!("could not publish: {:?}", err),
         };
     }
 
-    pub async fn handle_event(&mut self, event: NetworkMessage, peer: Option<PeerId>) {
-        info!("got event: {:?} from {:?}", event, peer);
+    pub async fn handle_event(&mut self, event: NetworkMessage, _peer: Option<PeerId>) {
+        // info!("got event: {:?} from {:?}", event, peer);
         match event {
             NetworkMessage::Statement(signed_statement) => {
                 let statement = signed_statement.statement;
-                match self.storage.persist(statement).await {
+                let mut storage = self.storage.write().await;
+                match storage.persist(statement).await {
                     Ok(persist_result) => {
                         info!(
                             "{} statement {} has id {}",
@@ -196,8 +199,7 @@ impl ReputationNet {
                             persist_result.id
                         );
                         for signed_opinion in signed_statement.opinions {
-                            let result = self
-                                .storage
+                            let result = storage
                                 .persist_opinion(signed_opinion, &persist_result.id)
                                 .await
                                 .expect("could insert opinion");
@@ -220,22 +222,25 @@ impl ReputationNet {
                 }
             }
             NetworkMessage::TemplateRequest => {
-                let entities = self.storage.list_all_templates().await.unwrap();
+                let entities = self
+                    .storage
+                    .read()
+                    .await
+                    .list_all_templates()
+                    .await
+                    .unwrap();
+                let key = self.storage.read().await.own_key().key.clone();
                 for entity in entities {
                     let statement = Statement {
                         name: "template".into(),
                         entities: vec![entity],
                     };
                     let opinion = Opinion::default();
-                    if let Ok(own_key) = self.storage.own_key().await {
-                        let signed_statement = SignedStatement {
-                            opinions: vec![
-                                opinion.sign_using(&statement.signable_bytes(), &own_key.key)
-                            ],
-                            statement: statement,
-                        };
-                        self.publish_statement(signed_statement).await;
-                    }
+                    let signed_statement = SignedStatement {
+                        opinions: vec![opinion.sign_using(&statement.signable_bytes(), &key)],
+                        statement: statement,
+                    };
+                    self.publish_statement(signed_statement).await;
                 }
             }
             _ => {
