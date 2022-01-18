@@ -2,6 +2,7 @@ use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use async_std::sync::RwLock;
 use lazy_static::lazy_static;
+use log::error;
 use mailparse::{addrparse_header, parse_header, MailAddr};
 use unicase::UniCase;
 
@@ -153,7 +154,7 @@ impl PolicyAccumulator {
                 }
             }
         } else {
-            println!("could not parse header {}", data);
+            error!("could not parse header {}", data);
         }
     }
 

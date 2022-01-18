@@ -2,6 +2,7 @@ use std::error::Error;
 use std::str::FromStr;
 use std::time::Instant;
 
+use log::error;
 #[allow(unused_imports)]
 use log::info;
 
@@ -22,7 +23,7 @@ impl ReputationNet {
         }
         if what.starts_with("?") {
             if let Err(e) = self.local_query(&what[1..]).await {
-                println!("{:?}", e);
+                error!("{:?}", e);
             }
             return;
         }
@@ -47,8 +48,8 @@ impl ReputationNet {
                         self.publish_statement(signed_statement).await;
                     }
                     Err(_e) => {
-                        println!("No matching template: {}", template);
-                        println!("Available:");
+                        error!("No matching template: {}", template);
+                        error!("Available:");
                         for t in self
                             .storage
                             .read()
@@ -57,12 +58,12 @@ impl ReputationNet {
                             .await
                             .iter()
                         {
-                            println!("  {:?}", t)
+                            error!("  {:?}", t)
                         }
                     }
                 }
             }
-            Err(e) => println!("Invalid statement format: {:?}", e),
+            Err(e) => error!("Invalid statement format: {:?}", e),
         };
     }
 
@@ -74,7 +75,7 @@ impl ReputationNet {
         match words[0] {
             "fix-cidr" => {
                 if let Err(e) = self.storage.write().await.fix_cidr().await {
-                    println!("error: {:?}", e);
+                    error!("error: {:?}", e);
                 }
             }
             "sync" => {
@@ -84,7 +85,7 @@ impl ReputationNet {
                         _ => match u32::from_str(words[1]) {
                             Ok(u) => Date::from(u),
                             _ => {
-                                println!("could not parse date: {}", words[1]);
+                                error!("could not parse date: {}", words[1]);
                                 Date::today()
                             }
                         },
@@ -92,16 +93,10 @@ impl ReputationNet {
                 } else {
                     Date::today()
                 };
-                let sync_infos = self
-                    .storage
-                    .read()
-                    .await
-                    .get_sync_infos(date)
-                    .await
-                    .expect("sync infos");
-                println!("{:?}", sync_infos);
+                info!("sending annouce for {}", date);
+                self.announce_infos(date).await
             }
-            _ => println!("unknown command: {}", command),
+            _ => error!("unknown command: {}", command),
         }
     }
 
@@ -115,7 +110,7 @@ impl ReputationNet {
             .find_statements_about(&entity)
             .await?;
         let duration = instant.elapsed();
-        println!("Execution time: {:?}", duration);
+        info!("Execution time: {:?}", duration);
         if statements.len() == 0 {
             println!("No matches");
         }

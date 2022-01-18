@@ -1,61 +1,46 @@
 use std::str::FromStr;
 
 use async_trait::async_trait;
+use log::{debug, error};
 use sqlx::Error;
 
-use crate::model::{Statement, Entity};
+use crate::model::{Entity, Statement};
 
-use super::{Repository, Storage, Id, Persistent, DB, PrimitiveId, PersistResult};
+use super::{DbStatement, Id, PersistResult, Persistent, Repository, Storage, DB, RowType};
 
 #[async_trait]
 impl Repository<Statement> for Storage {
-    type RowType = (
-        PrimitiveId,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    );
+    type RowType = DbStatement;
+    type FkType = ();
 
     async fn get(&self, id: Id<Statement>) -> Result<Option<Persistent<Statement>>, Error> {
-        match sqlx::query_as::<DB, Self::RowType>(
-            "select
-                    id,
-                    name,
-                    entity_1,
-                    entity_2,
-                    entity_3,
-                    entity_4
-                from
-                    statement
-                where
-                    id = ?",
-        )
-        .bind(id.id)
+        debug!("DB: getting {} with id {}", Self::RowType::TABLE, id);
+        match sqlx::query_as::<DB, Self::RowType>(&format!(
+            "select {} from {} where id = ?",
+            Self::RowType::COLUMNS,
+            Self::RowType::TABLE
+        ))
+        .bind(id)
         .fetch_one(&self.pool)
         .await
         {
-            Ok(tuple) => {
-                return Ok(Some(Self::row_to_record(tuple)));
+            Ok(row) => {
+                debug!("got row {:?}", row);
+                return Ok(Some(Self::row_to_record(row)));
             }
-            _ => Ok(None),
+            Err(e) => {
+                error!("error fetching {} with id {}: {:?}", Self::RowType::TABLE, id, e);
+                Ok(None)
+            }
         }
     }
 
     async fn get_all(&self) -> Result<Vec<Persistent<Statement>>, Error> {
-        // dummy implementation for now
-        let rows = sqlx::query_as::<DB, Self::RowType>(
-            "select
-                    id,
-                    name,
-                    entity_1,
-                    entity_2,
-                    entity_3,
-                    entity_4
-                from
-                    statement",
-        )
+        let rows = sqlx::query_as::<DB, Self::RowType>(&format!(
+            "select {} from {}",
+            Self::RowType::COLUMNS,
+            Self::RowType::TABLE
+        ))
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -67,7 +52,7 @@ impl Repository<Statement> for Storage {
     async fn persist(&mut self, statement: Statement) -> Result<PersistResult<Statement>, Error> {
         // ensure that the statement matches an existing template
         if !self.has_matching_template(&statement) {
-            println!("did not find matching template for {}", statement);
+            error!("did not find matching template for {}", statement);
             return Err(Error::RowNotFound);
         }
 
@@ -125,20 +110,22 @@ impl Repository<Statement> for Storage {
     }
 
     fn row_to_record(row: Self::RowType) -> Persistent<Statement> {
-        let (id, name, entity_1, entity_2, entity_3, entity_4) = row;
-        let mut entities = vec![Entity::from_str(&entity_1.as_str()).unwrap()];
-        if let Some(entity) = entity_2 {
+        let mut entities = vec![Entity::from_str(&row.entity_1.as_str()).unwrap()];
+        if let Some(entity) = row.entity_2 {
             entities.push(Entity::from_str(&entity.as_str()).unwrap())
         }
-        if let Some(entity) = entity_3 {
+        if let Some(entity) = row.entity_3 {
             entities.push(Entity::from_str(&entity.as_str()).unwrap())
         }
-        if let Some(entity) = entity_4 {
+        if let Some(entity) = row.entity_4 {
             entities.push(Entity::from_str(&entity.as_str()).unwrap())
         }
         Persistent {
-            id: Id::new(id),
-            data: Statement { name, entities },
+            id: row.id,
+            data: Statement {
+                name: row.name,
+                entities,
+            },
         }
     }
 }

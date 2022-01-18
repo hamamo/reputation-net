@@ -9,20 +9,20 @@ use futures::{
 use log::{debug, info};
 use std::error::Error;
 
-use libp2p::{multiaddr::Protocol, swarm::SwarmEvent, Multiaddr, PeerId, Swarm};
+use libp2p::{multiaddr::Protocol, swarm::SwarmEvent, Multiaddr, Swarm};
 
 mod milter;
 mod model;
 mod reputation_net;
 mod storage;
 
-use reputation_net::{NetworkMessage, ReputationNet};
+use reputation_net::{ReputationNet, NetworkMessageWithPeerId};
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
     let (input_sender, input_receiver) = channel::<String>(5);
-    let (event_sender, event_receiver) = channel::<(NetworkMessage, Option<PeerId>)>(100);
+    let (event_sender, event_receiver) = channel::<NetworkMessageWithPeerId>(100);
 
     let mut swarm = {
         let behaviour = ReputationNet::new(event_sender).await;
@@ -90,7 +90,7 @@ async fn input_reader(mut sender: Sender<String>) -> Result<(), std::io::Error> 
 async fn network_loop(
     mut swarm: Swarm<ReputationNet>,
     mut input_receiver: Receiver<String>,
-    mut event_receiver: Receiver<(NetworkMessage, Option<PeerId>)>,
+    mut event_receiver: Receiver<NetworkMessageWithPeerId>,
 ) -> Result<(), std::io::Error> {
     loop {
         select! {
@@ -122,12 +122,12 @@ async fn network_loop(
                 }
             }
             event = event_receiver.next() => {
-                info!("internal event: {:?}", event);
+                info!("network message: {:?}", event);
                 match event {
                     Some(e) => {
                         let (message, peer) = e;
                         debug!("network event: {:?}", message);
-                        swarm.behaviour_mut().handle_event(message, peer).await;
+                        swarm.behaviour_mut().handle_network_message(message, peer).await;
                     }
                     None => panic!("end of network?")
                 }

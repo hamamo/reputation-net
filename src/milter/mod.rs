@@ -12,6 +12,7 @@ use futures::{
     io::{BufReader, BufWriter},
     AsyncReadExt, AsyncWriteExt, StreamExt,
 };
+use log::{info, debug, error};
 
 use crate::storage::Storage;
 
@@ -32,14 +33,14 @@ pub async fn run_milter(
     addr: impl ToSocketAddrs + std::fmt::Debug,
     storage: Arc<RwLock<Storage>>,
 ) -> Result<(), Error> {
-    println!("starting milter listener on {:?}", addr);
+    info!("starting milter listener on {:?}", addr);
     let listener = TcpListener::bind(addr).await?;
-    println!("got listener: {:?}", listener);
+    info!("got listener: {:?}", listener);
     let mut incoming = listener.incoming();
-    println!("got incoming stream: {:?}", incoming);
+    info!("got incoming stream: {:?}", incoming);
     while let Some(stream) = incoming.next().await {
         let stream = stream?;
-        println!("accepted connection from {:?}", stream.peer_addr());
+        info!("accepted connection from {:?}", stream.peer_addr());
         spawn(Milter::run_on(stream, storage.clone()));
     }
     Ok(())
@@ -53,14 +54,14 @@ impl Milter {
             policy: PolicyAccumulator::new(storage),
         };
         let result = milter.run().await;
-        println!("milter run result: {:?}", result);
+        debug!("milter run result: {:?}", result);
         result
     }
 
     async fn run(&mut self) -> Result<(), Error> {
         loop {
             let command = self.read_command().await?;
-            println!("--> {:?}", command);
+            debug!("--> {:?}", command);
             self.handle_command(&command).await?;
         }
         #[allow(unreachable_code)]
@@ -76,14 +77,14 @@ impl Milter {
         match Command::parse(&data) {
             Ok((_i, packet)) => Ok(packet),
             Err(_) => {
-                println!("unable to parse {:?}", data);
+                error!("unable to parse {:?}", data);
                 Err(Error::new(ErrorKind::InvalidData, "invalid milter format"))
             }
         }
     }
 
     async fn write_response(&mut self, response: &Response) -> Result<(), Error> {
-        println!("<-- {:?}", response);
+        debug!("<-- {:?}", response);
         let data = response.data();
         self.output.write_all(&data).await?;
         self.output.flush().await?;

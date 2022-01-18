@@ -4,6 +4,7 @@ use std::{collections::HashMap, str::FromStr};
 use itertools::Itertools;
 use libp2p::identity::Keypair;
 
+use log::{debug, info};
 // library imports
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow},
@@ -13,6 +14,8 @@ use sqlx::{
 // own imports
 use crate::model::{Date, Entity, Opinion, OwnKey, PublicKey, SignedOpinion, Statement, Template};
 
+mod schema;
+pub use schema::*;
 mod repository;
 pub use repository::*;
 mod statement;
@@ -47,7 +50,7 @@ impl Storage {
                 .unwrap(),
             templates: HashMap::new(),
             signers: HashMap::new(),
-            own_key: OwnKey::new()
+            own_key: OwnKey::new(),
         };
         db.initialize_database().await.expect("could initialize");
         db.cleanup().await.expect("could cleanup");
@@ -88,28 +91,28 @@ impl Storage {
     }
 
     pub async fn read_templates(&mut self) -> Result<(), Error> {
-        let template_entries = sqlx::query_as::<DB, (PrimitiveId, String)>(
+        let template_entries = sqlx::query_as::<DB, (Id<Statement>, String)>(
             "select id, entity_1 from statement where name='template'",
         )
         .fetch_all(&self.pool)
         .await?;
         for (id, s) in template_entries {
             if let Ok(template) = Template::from_str(&s) {
-                self.templates.insert(Id::new(id), template);
+                self.templates.insert(id, template);
             }
         }
         Ok(())
     }
 
     pub async fn read_signers(&mut self) -> Result<(), Error> {
-        let signer_entries = sqlx::query_as::<DB, (PrimitiveId, String)>(
+        let signer_entries = sqlx::query_as::<DB, (Id<Statement>, String)>(
             "select id, entity_1 from statement where name='signer'",
         )
         .fetch_all(&self.pool)
         .await?;
         for (id, s) in signer_entries {
             if let Ok(signer) = PublicKey::from_str(&s) {
-                self.signers.insert(Id::new(id), signer);
+                self.signers.insert(id, signer);
             }
         }
         Ok(())
@@ -164,58 +167,45 @@ impl Storage {
         &self,
         entity: &Entity,
     ) -> Result<Vec<Persistent<Statement>>, Error> {
-        let query = match entity.cidr_minmax() {
-            (Some(min), Some(max)) => sqlx::query_as::<
-                DB,
-                (
-                    PrimitiveId,
-                    String,
-                    String,
-                    Option<String>,
-                    Option<String>,
-                    Option<String>,
-                ),
-            >(
-                "select id, name, entity_1, entity_2, entity_3, entity_4
-                    from statement
-                    where cidr_min <= ? and cidr_max >= ?",
-            )
-            .bind(min)
-            .bind(max),
-            _ => sqlx::query_as::<
-                DB,
-                (
-                    PrimitiveId,
-                    String,
-                    String,
-                    Option<String>,
-                    Option<String>,
-                    Option<String>,
-                ),
-            >(
-                "select id, name, entity_1, entity_2, entity_3, entity_4
-                    from statement
-                    where entity_1 = ?",
-            )
-            .bind(entity.to_string()),
+        let rows = match entity.cidr_minmax() {
+            (Some(min), Some(max)) => {
+                sqlx::query_as::<DB, DbStatement>(&format!(
+                    "select {} from {} where cidr_min <= ? and cidr_max >= ?",
+                    DbStatement::COLUMNS,
+                    DbStatement::TABLE
+                ))
+                .bind(min)
+                .bind(max)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            _ => {
+                sqlx::query_as::<DB, DbStatement>(&format!(
+                    "select {} from {} where entity_1 = ?",
+                    DbStatement::COLUMNS,
+                    DbStatement::TABLE
+                ))
+                .bind(entity.to_string())
+                .fetch_all(&self.pool)
+                .await?
+            }
         };
-        let rows = query.fetch_all(&self.pool).await?;
         let statements = rows
             .iter()
-            .map(|(id, name, entity_1, entity_2, entity_3, entity_4)| {
-                let mut entities = vec![Entity::from_str(entity_1).unwrap()];
-                if let Some(entity) = entity_2 {
-                    entities.push(Entity::from_str(entity).unwrap())
+            .map(|row| {
+                let mut entities = vec![Entity::from_str(&row.entity_1).unwrap()];
+                if let Some(entity) = &row.entity_2 {
+                    entities.push(Entity::from_str(&entity).unwrap())
                 }
-                if let Some(entity) = entity_3 {
-                    entities.push(Entity::from_str(entity).unwrap())
+                if let Some(entity) = &row.entity_3 {
+                    entities.push(Entity::from_str(&entity).unwrap())
                 }
-                if let Some(entity) = entity_4 {
-                    entities.push(Entity::from_str(entity).unwrap())
+                if let Some(entity) = &row.entity_4 {
+                    entities.push(Entity::from_str(&entity).unwrap())
                 }
 
-                Id::new(*id).with(Statement {
-                    name: name.to_string(),
+                row.id.with(Statement {
+                    name: row.name.to_string(),
                     entities: entities,
                 })
             })
@@ -227,42 +217,31 @@ impl Storage {
         &self,
         id: Id<Statement>,
     ) -> Result<Vec<Persistent<SignedOpinion>>, Error> {
-        let rows = sqlx::query_as::<DB, (PrimitiveId, PrimitiveId, Date, u16, u8, i8, String)>(
-            "select
-                    id,
-                    signer_id,
-                    date,
-                    valid,
-                    serial,
-                    certainty,
-                    signature
-                from opinion
-                where
-                    statement_id = ?
-                ",
-        )
-        .bind(id.id)
+        let rows = sqlx::query_as::<DB, DbOpinion>(&format!(
+            "select {} from {} where statement_id = ?",
+            DbOpinion::COLUMNS,
+            DbOpinion::TABLE
+        ))
+        .bind(id)
         .fetch_all(&self.pool)
         .await?;
         let opinions = rows
             .iter()
-            .map(
-                |(id, signer_id, date, valid, serial, certainty, signature)| {
-                    let signer = self.signers.get(&Id::new(*signer_id)).unwrap().clone();
-                    let opinion = SignedOpinion {
-                        opinion: Opinion {
-                            date: date.clone(),
-                            valid: *valid,
-                            serial: *serial,
-                            certainty: *certainty,
-                            comment: String::new(),
-                        },
-                        signer,
-                        signature: base64::decode(signature).unwrap(),
-                    };
-                    Id::new(*id).with(opinion)
-                },
-            )
+            .map(|row| {
+                let signer = self.signers.get(&row.signer_id).unwrap().clone();
+                let opinion = SignedOpinion {
+                    opinion: Opinion {
+                        date: row.date.clone(),
+                        valid: row.valid,
+                        serial: row.serial,
+                        certainty: row.certainty,
+                        comment: String::new(),
+                    },
+                    signer,
+                    signature: base64::decode(&row.signature).unwrap(),
+                };
+                row.id.with(opinion)
+            })
             .collect();
         Ok(opinions)
     }
@@ -285,7 +264,7 @@ impl Storage {
                 }
             }
         }
-        let mut query = sqlx::query_scalar::<DB, PrimitiveId>(&sql)
+        let mut query = sqlx::query_scalar::<DB, Id<Statement>>(&sql)
             .bind(name)
             .bind(entity_1);
         if let Some(s) = entity_2 {
@@ -298,7 +277,7 @@ impl Storage {
             }
         }
         match query.fetch_optional(&self.pool).await? {
-            Some(primitive_id) => Ok(Some(Id::new(primitive_id))),
+            Some(id) => Ok(Some(id)),
             None => Ok(None),
         }
     }
@@ -328,11 +307,11 @@ impl Storage {
         .bind(cidr_min)
         .bind(cidr_max);
         query.execute(&mut tx).await?;
-        let id = sqlx::query_scalar::<DB, PrimitiveId>("select last_insert_rowid()")
+        let id = sqlx::query_scalar::<DB, Id<Statement>>("select last_insert_rowid()")
             .fetch_one(&mut tx)
             .await?;
         tx.commit().await?;
-        Ok(Id::new(id))
+        Ok(id)
     }
 
     fn requires_email_hashing(&self, statement: &Statement) -> bool {
@@ -362,11 +341,11 @@ impl Storage {
         let signer_result = self.persist(signer).await.unwrap();
         let opinion = &signed_opinion.opinion;
 
-        let prev_opinion_result = sqlx::query_as::<DB, (PrimitiveId, Date, u8)>(
+        let prev_opinion_result = sqlx::query_as::<DB, (Id<SignedOpinion>, Date, u8)>(
             "select id,date,serial from opinion where statement_id = ? and signer_id = ?",
         )
-        .bind(statement_id.id)
-        .bind(signer_result.id.id)
+        .bind(statement_id)
+        .bind(signer_result.id)
         .fetch_optional(&self.pool)
         .await?;
         if let Some((old_id, date, serial)) = prev_opinion_result {
@@ -378,13 +357,13 @@ impl Storage {
                     .await
                     .expect("could delete old opinion");
             } else {
-                return Ok(PersistResult::old(Id::new(old_id), signed_opinion));
+                return Ok(PersistResult::old(old_id, signed_opinion));
             }
         }
         let mut tx = self.pool.begin().await.unwrap();
         sqlx::query("insert into opinion(statement_id, signer_id, date, valid, serial, certainty, signature) values(?,?,?,?,?,?,?)")
-            .bind(statement_id.id)
-            .bind(signer_result.id.id)
+            .bind(statement_id)
+            .bind(signer_result.id)
             .bind(opinion.date)
             .bind(opinion.valid)
             .bind(opinion.serial)
@@ -394,11 +373,11 @@ impl Storage {
             .await
             .expect("insert signed opinion");
         let id = sqlx::query("select last_insert_rowid()")
-            .map(|row: SqliteRow| -> PrimitiveId { row.get::<PrimitiveId, usize>(0) })
+            .map(|row: SqliteRow| -> Id<SignedOpinion> { row.get::<Id<SignedOpinion>, usize>(0) })
             .fetch_one(&mut tx)
             .await?;
         tx.commit().await?;
-        Ok(PersistResult::new(Id::new(id), signed_opinion))
+        Ok(PersistResult::new(id, signed_opinion))
     }
 
     pub async fn sign_statement_default(
@@ -448,15 +427,20 @@ impl Storage {
     }
 
     pub async fn ensure_own_key(&mut self) -> Result<(), Error> {
-        self.own_key = match sqlx::query_as::<DB, (PrimitiveId, String)>("select signer_id, key from private_key")
-            .fetch_optional(&self.pool)
-            .await?
+        self.own_key = match sqlx::query_as::<DB, DbPrivateKey>(&format!(
+            "select {} from {}",
+            DbPrivateKey::COLUMNS,
+            DbPrivateKey::TABLE
+        ))
+        .fetch_optional(&self.pool)
+        .await?
         {
-            Some((id, key)) => {
-                let key_bytes = base64::decode(key).expect("base64 decode");
+            Some(private_key) => {
+                let key_bytes = base64::decode(private_key.key).expect("base64 decode");
                 let privkey = libp2p::identity::secp256k1::SecretKey::from_bytes(key_bytes)
                     .expect("secp256k1 decode");
-                let statement = self.get(Id::new(id)).await?.unwrap();
+                debug!("getting statement with id {}", private_key.signer_id);
+                let statement = self.get(private_key.signer_id).await?.unwrap();
                 let signer = statement.entities[0].clone();
                 let keypair =
                     Keypair::Secp256k1(libp2p::identity::secp256k1::Keypair::from(privkey));
@@ -471,13 +455,16 @@ impl Storage {
                 let statement = Statement::signer(own_key.signer.clone());
                 let persist_result = self.persist(statement).await?;
                 let privkey = own_key.privkey_string();
-                println!("trust {} {}", persist_result.id, privkey);
+                info!("trust {} {}", persist_result.id, privkey);
                 let mut tx = self.pool.begin().await.unwrap();
-                sqlx::query("insert into private_key(signer_id, key) values(?,?)")
-                    .bind(persist_result.id.id)
-                    .bind(privkey)
-                    .execute(&mut tx)
-                    .await?;
+                sqlx::query(&format!(
+                    "insert into {} (signer_id, key) values(?,?)",
+                    DbPrivateKey::TABLE
+                ))
+                .bind(persist_result.id)
+                .bind(privkey)
+                .execute(&mut tx)
+                .await?;
                 tx.commit().await?;
                 own_key
             }
@@ -527,7 +514,7 @@ impl Storage {
                 sqlx::query("update statement set cidr_min=?, cidr_max=? where id=?")
                     .bind(cidr_min)
                     .bind(cidr_max)
-                    .bind(s.id.id)
+                    .bind(s.id)
                     .execute(&self.pool)
                     .await?;
             }
@@ -572,7 +559,7 @@ mod tests {
         block_on(storage.initialize_database()).expect("could initialize database");
         let statement = Statement::from_str("template(template(Template))").unwrap();
         let persist_result = block_on(storage.persist(statement)).unwrap();
-        assert!(persist_result.id.id >= 1);
+        assert!(persist_result.id >= Id::new(1));
     }
 
     #[test]

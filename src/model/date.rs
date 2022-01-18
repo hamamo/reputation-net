@@ -9,7 +9,7 @@ use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{Database, Decode, Encode, Type, TypeInfo};
 
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Eq, Hash)]
 pub struct Date {
     pub d: u32, // days since UNIX epoch (0 = 1970-01-01)
 }
