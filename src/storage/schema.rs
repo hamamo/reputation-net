@@ -1,4 +1,4 @@
-use super::{Date, Id, SignedOpinion, Statement, RowType};
+use super::{Date, Id, Opinion, Statement, RowType};
 
 /// Structure definitions for the database tables
 
@@ -14,7 +14,7 @@ pub struct DbStatement {
 
 #[derive(sqlx::FromRow, Debug)]
 pub struct DbOpinion {
-    pub id: Id<SignedOpinion>,
+    pub id: Id<Opinion>,
     pub statement_id: Id<Statement>,
     pub signer_id: Id<Statement>,
     pub date: Date,

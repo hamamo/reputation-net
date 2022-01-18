@@ -42,6 +42,27 @@ pub trait RowType {
     const COLUMNS: &'static str;
 }
 
+#[async_trait]
+pub trait Repository<T> {
+    /// RowType describes the format of a database row
+    type RowType: RowType;
+
+    /// FkType describes the foreign keys that go into a database row (those are normally not included in T)
+    type FkType;
+
+    /// retrieve an existing record by id
+    async fn get(&self, id: Id<T>) -> Result<Option<Persistent<T>>, sqlx::Error>;
+
+    /// get all records
+    async fn get_all(&self) -> Result<Vec<Persistent<T>>, sqlx::Error>;
+
+    /// persist a record (find if old, insert if new)
+    async fn persist(&mut self, data: T) -> Result<PersistResult<T>, sqlx::Error>;
+
+    /// transform a database row into a record
+    fn row_to_record(row: Self::RowType) -> Persistent<T>;
+}
+
 impl<T> Id<T> {
     pub fn new(id: PrimitiveId) -> Self {
         Self {
@@ -185,25 +206,4 @@ impl<T> Deref for PersistResult<T> {
     fn deref(&self) -> &T {
         &self.data
     }
-}
-
-#[async_trait]
-pub trait Repository<T> {
-    /// RowType describes the format of a database row
-    type RowType: RowType;
-
-    /// FkType describes the foreign keys that go into a database row (those are normally not included in T)
-    type FkType;
-
-    /// retrieve an existing record by id
-    async fn get(&self, id: Id<T>) -> Result<Option<Persistent<T>>, sqlx::Error>;
-
-    /// get all records
-    async fn get_all(&self) -> Result<Vec<Persistent<T>>, sqlx::Error>;
-
-    /// persist a record (find if old, insert if new)
-    async fn persist(&mut self, data: T) -> Result<PersistResult<T>, sqlx::Error>;
-
-    /// transform a database row into a record
-    fn row_to_record(row: Self::RowType) -> Persistent<T>;
 }

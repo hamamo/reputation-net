@@ -12,7 +12,7 @@ use sqlx::{
 };
 
 // own imports
-use crate::model::{Date, Entity, Opinion, OwnKey, PublicKey, SignedOpinion, Statement, Template};
+use crate::model::{Date, Entity, UnsignedOpinion, OwnKey, PublicKey, Opinion, Statement, Template};
 
 mod schema;
 pub use schema::*;
@@ -216,7 +216,7 @@ impl Storage {
     pub async fn list_opinions_on(
         &self,
         id: Id<Statement>,
-    ) -> Result<Vec<Persistent<SignedOpinion>>, Error> {
+    ) -> Result<Vec<Persistent<Opinion>>, Error> {
         let rows = sqlx::query_as::<DB, DbOpinion>(&format!(
             "select {} from {} where statement_id = ?",
             DbOpinion::COLUMNS,
@@ -229,8 +229,8 @@ impl Storage {
             .iter()
             .map(|row| {
                 let signer = self.signers.get(&row.signer_id).unwrap().clone();
-                let opinion = SignedOpinion {
-                    opinion: Opinion {
+                let opinion = Opinion {
+                    data: UnsignedOpinion {
                         date: row.date.clone(),
                         valid: row.valid,
                         serial: row.serial,
@@ -333,15 +333,15 @@ impl Storage {
 
     pub async fn persist_opinion(
         &mut self,
-        signed_opinion: SignedOpinion,
+        opinion: Opinion,
         statement_id: &Id<Statement>,
-    ) -> Result<PersistResult<SignedOpinion>, Error> {
+    ) -> Result<PersistResult<Opinion>, Error> {
         // this actually persists a signed opinion. Raw opinions without signature are only used for temporary purposes.
-        let signer = Statement::signer(Entity::Signer(signed_opinion.signer.clone()));
+        let signer = Statement::signer(Entity::Signer(opinion.signer.clone()));
         let signer_result = self.persist(signer).await.unwrap();
-        let opinion = &signed_opinion.opinion;
+        let opinion_data = &opinion.data;
 
-        let prev_opinion_result = sqlx::query_as::<DB, (Id<SignedOpinion>, Date, u8)>(
+        let prev_opinion_result = sqlx::query_as::<DB, (Id<Opinion>, Date, u8)>(
             "select id,date,serial from opinion where statement_id = ? and signer_id = ?",
         )
         .bind(statement_id)
@@ -349,7 +349,7 @@ impl Storage {
         .fetch_optional(&self.pool)
         .await?;
         if let Some((old_id, date, serial)) = prev_opinion_result {
-            if date < opinion.date || (date == opinion.date && serial < opinion.serial) {
+            if date < opinion_data.date || (date == opinion_data.date && serial < opinion_data.serial) {
                 // delete old, overridden opinion
                 sqlx::query("delete from opinion where id = ?")
                     .bind(old_id)
@@ -357,35 +357,35 @@ impl Storage {
                     .await
                     .expect("could delete old opinion");
             } else {
-                return Ok(PersistResult::old(old_id, signed_opinion));
+                return Ok(PersistResult::old(old_id, opinion));
             }
         }
         let mut tx = self.pool.begin().await.unwrap();
         sqlx::query("insert into opinion(statement_id, signer_id, date, valid, serial, certainty, signature) values(?,?,?,?,?,?,?)")
             .bind(statement_id)
             .bind(signer_result.id)
-            .bind(opinion.date)
-            .bind(opinion.valid)
-            .bind(opinion.serial)
-            .bind(opinion.certainty)
-            .bind(base64::encode(&signed_opinion.signature))
+            .bind(opinion_data.date)
+            .bind(opinion_data.valid)
+            .bind(opinion_data.serial)
+            .bind(opinion_data.certainty)
+            .bind(base64::encode(&opinion.signature))
             .execute(&mut tx)
             .await
             .expect("insert signed opinion");
         let id = sqlx::query("select last_insert_rowid()")
-            .map(|row: SqliteRow| -> Id<SignedOpinion> { row.get::<Id<SignedOpinion>, usize>(0) })
+            .map(|row: SqliteRow| -> Id<Opinion> { row.get::<Id<Opinion>, usize>(0) })
             .fetch_one(&mut tx)
             .await?;
         tx.commit().await?;
-        Ok(PersistResult::new(id, signed_opinion))
+        Ok(PersistResult::new(id, opinion))
     }
 
     pub async fn sign_statement_default(
         &mut self,
         statement: Statement,
         own_key: &OwnKey,
-    ) -> Result<PersistResult<SignedOpinion>, Error> {
-        let opinion = Opinion {
+    ) -> Result<PersistResult<Opinion>, Error> {
+        let opinion = UnsignedOpinion {
             date: Date::today(),
             valid: 30,
             serial: 0,

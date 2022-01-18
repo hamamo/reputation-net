@@ -31,7 +31,7 @@ use crate::{
     storage::{PersistResult, Repository},
 };
 
-use super::model::{Entity, Opinion, SignedStatement, Statement};
+use super::model::{Entity, UnsignedOpinion, SignedStatement, Statement};
 use super::storage::Storage;
 
 mod messages;
@@ -162,7 +162,7 @@ impl ReputationNet {
         &mut self,
         statement: PersistResult<Statement>,
     ) -> Option<SignedStatement> {
-        let opinion = Opinion {
+        let opinion = UnsignedOpinion {
             date: Date::today(),
             valid: 30,
             serial: 0,
@@ -265,7 +265,7 @@ impl ReputationNet {
                         name: "template".into(),
                         entities: vec![entity],
                     };
-                    let opinion = Opinion::default();
+                    let opinion = UnsignedOpinion::default();
                     let signed_statement = SignedStatement {
                         opinions: vec![opinion.sign_using(&statement.signable_bytes(), &key)],
                         statement: statement,

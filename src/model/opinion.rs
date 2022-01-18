@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use super::{percent_decode, percent_encode, Keypair, PublicKey, Signature, Statement, Date};
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Opinion {
+pub struct UnsignedOpinion {
     pub date: Date,       // day since the UNIX epoch
     pub valid: u16,      // number of days this opinion is considered valid
     pub serial: u8, // to detect most recent opinion about a statement if more than one are made on one day
@@ -18,8 +18,8 @@ pub struct Opinion {
 }
 
 #[derive(Clone, Debug)]
-pub struct SignedOpinion {
-    pub opinion: Opinion,
+pub struct Opinion {
+    pub data: UnsignedOpinion,
     pub signer: PublicKey,
     pub signature: Signature,
 }
@@ -28,17 +28,17 @@ pub struct SignedOpinion {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SignedStatement {
     pub statement: Statement,
-    pub opinions: Vec<SignedOpinion>,
+    pub opinions: Vec<Opinion>,
 }
 
-impl Opinion {
+impl UnsignedOpinion {
     #[allow(dead_code)]
-    pub fn sign_using(self, statement_bytes: &Vec<u8>, keypair: &Keypair) -> SignedOpinion {
+    pub fn sign_using(self, statement_bytes: &Vec<u8>, keypair: &Keypair) -> Opinion {
         // return a signed version. If original is already signed, strip signature first
 
         let signature = keypair.sign(&self.signable_bytes(statement_bytes)).unwrap();
-        SignedOpinion {
-            opinion: self,
+        Opinion {
+            data: self,
             signer: PublicKey {
                 key: keypair.public(),
             },
@@ -57,7 +57,7 @@ impl Opinion {
     }
 }
 
-impl Default for Opinion {
+impl Default for UnsignedOpinion {
     fn default() -> Self {
         Self {
             date: Date::today(),
@@ -69,7 +69,7 @@ impl Default for Opinion {
     }
 }
 
-impl Display for Opinion {
+impl Display for UnsignedOpinion {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
@@ -103,7 +103,7 @@ impl From<ParseIntError> for InvalidFormat {
     }
 }
 
-impl FromStr for Opinion {
+impl FromStr for UnsignedOpinion {
     type Err = InvalidFormat;
     fn from_str(s: &str) -> Result<Self, InvalidFormat> {
         let parts: Vec<&str> = s.split(";").collect();
@@ -124,27 +124,27 @@ impl FromStr for Opinion {
     }
 }
 
-impl SignedOpinion {
+impl Opinion {
     #[allow(dead_code)]
     pub fn verify_signature(&self, statement_bytes: &Vec<u8>) -> bool {
-        let signable_bytes = self.opinion.signable_bytes(statement_bytes);
+        let signable_bytes = self.data.signable_bytes(statement_bytes);
         self.signer.key.verify(&signable_bytes, &self.signature)
     }
 }
 
-impl Display for SignedOpinion {
+impl Display for Opinion {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
             "{};{};{}",
-            self.opinion,
+            self.data,
             self.signer,
             base64::encode(&self.signature)
         )
     }
 }
 
-impl FromStr for SignedOpinion {
+impl FromStr for Opinion {
     type Err = InvalidFormat;
     fn from_str(s: &str) -> Result<Self, InvalidFormat> {
         let parts: Vec<&str> = s.split(";").collect();
@@ -157,7 +157,7 @@ impl FromStr for SignedOpinion {
             });
         }
         let d: u32 = parts[0].parse()?;
-        let opinion = Opinion {
+        let opinion = UnsignedOpinion {
             date: Date::from(d),
             valid: parts[1].parse()?,
             serial: parts[2].parse()?,
@@ -165,7 +165,7 @@ impl FromStr for SignedOpinion {
             comment: percent_decode(parts[4]),
         };
         let result = Self {
-            opinion: opinion,
+            data: opinion,
             signer: parts[5].parse().unwrap(),
             signature: base64::decode(parts[6]).unwrap(),
         };
@@ -173,7 +173,7 @@ impl FromStr for SignedOpinion {
     }
 }
 
-impl Serialize for SignedOpinion {
+impl Serialize for Opinion {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -182,24 +182,24 @@ impl Serialize for SignedOpinion {
     }
 }
 
-impl<'de> Deserialize<'de> for SignedOpinion {
+impl<'de> Deserialize<'de> for Opinion {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         use serde::de::Error;
         let s: &str = Deserialize::deserialize(deserializer)?;
-        match SignedOpinion::from_str(s) {
+        match Opinion::from_str(s) {
             Ok(e) => Ok(e),
             Err(_) => Err(D::Error::custom("a SignedOpinion")),
         }
     }
 }
 
-impl Deref for SignedOpinion {
-    type Target = Opinion;
+impl Deref for Opinion {
+    type Target = UnsignedOpinion;
     fn deref(&self) -> &Self::Target {
-        &self.opinion
+        &self.data
     }
 }
 
@@ -239,8 +239,8 @@ impl FromStr for SignedStatement {
         };
         let opinions = lines[1..]
             .iter()
-            .map(|s| Ok(s.parse::<SignedOpinion>()?))
-            .collect::<Result<Vec<SignedOpinion>, InvalidFormat>>()?;
+            .map(|s| Ok(s.parse::<Opinion>()?))
+            .collect::<Result<Vec<Opinion>, InvalidFormat>>()?;
 
         Ok(Self {
             statement: statement,
@@ -253,8 +253,8 @@ impl FromStr for SignedStatement {
 mod tests {
     use super::*;
 
-    fn example() -> Opinion {
-        Opinion {
+    fn example() -> UnsignedOpinion {
+        UnsignedOpinion {
             date: Date::from(18924), // 2021-10-24
             valid: 7,
             serial: 0,
@@ -273,7 +273,7 @@ mod tests {
     fn parse() {
         let mut opinion = example();
         opinion.comment = "hey;there".to_string();
-        let parsed = Opinion::from_str("18924;7;0;3;hey%3Bthere").unwrap();
+        let parsed = UnsignedOpinion::from_str("18924;7;0;3;hey%3Bthere").unwrap();
         assert_eq!(opinion, parsed)
     }
 
