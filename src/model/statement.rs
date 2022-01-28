@@ -12,14 +12,13 @@ use super::{
     template::{SpecificTemplate, Template},
 };
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Statement {
     pub name: String,
     pub entities: Vec<Entity>,
 }
 
 impl Statement {
-    #[allow(dead_code)]
     pub fn new(name: &str, entities: Vec<Entity>) -> Self {
         Self {
             name: name.into(),
@@ -79,6 +78,12 @@ impl Display for Statement {
             write!(f, "{}", entity)?;
         }
         write!(f, ")")
+    }
+}
+
+impl std::fmt::Debug for Statement {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        <Self as Display>::fmt(self, f)
     }
 }
 

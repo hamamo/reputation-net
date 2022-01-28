@@ -15,7 +15,7 @@ use super::packet::*;
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
-pub enum StatementLocation {
+enum Location {
     Connect,
     Helo,
     MailFrom,
@@ -34,9 +34,15 @@ pub enum Severity {
     Reject = 3,
 }
 
+struct Match {
+    location: Location,
+    entity: Entity,
+    statement: Statement,
+}
+
 pub struct PolicyAccumulator {
     storage: Arc<RwLock<Storage>>,
-    statements: Vec<(StatementLocation, Statement)>,
+    statements: Vec<Match>,
     macros: HashMap<String, String>,
     severity: Severity,
 }
@@ -77,44 +83,51 @@ impl PolicyAccumulator {
         match self
             .statements
             .iter()
-            .find(|(_location, statement)| statement.severity() == self.severity)
+            .find(|m| m.statement.severity() == self.severity)
         {
-            Some((location, statement)) => format!("{} in {:?}", statement, location),
+            Some(m) => {
+                format!(
+                    "{}: {} was reported as {}",
+                    m.location.reason(),
+                    m.entity.reason(),
+                    m.statement.reason()
+                )
+            }
             None => String::new(),
         }
     }
 
-    async fn lookup(&mut self, location: StatementLocation, what: &str) {
-        let statements = self.statements_about(what).await;
-        for statement in statements {
-            self.add(location, statement);
+    async fn lookup(&mut self, location: Location, what: &str) {
+        if let Ok(entity) = Entity::from_str(what) {
+            let statements = self.statements_about(&entity).await;
+            for statement in statements {
+                self.severity = self.severity.max(statement.severity());
+                self.statements.push(Match {
+                    location,
+                    entity: entity.clone(),
+                    statement,
+                });
+            }
         }
-    }
-
-    fn add(&mut self, location: StatementLocation, statement: Statement) {
-        self.severity = self.severity.max(statement.severity());
-        self.statements.push((location, statement));
     }
 
     pub async fn macros(&mut self, _data: &SmficMacro) -> () {}
 
     pub async fn connect(&mut self, data: &SmficConnect) -> () {
-        self.lookup(StatementLocation::Connect, &data.hostname.to_string())
+        self.lookup(Location::Connect, &data.hostname.to_string())
             .await;
-        self.lookup(StatementLocation::Connect, &data.address.to_string())
+        self.lookup(Location::Connect, &data.address.to_string())
             .await;
     }
 
     pub async fn helo(&mut self, data: &SmficHelo) -> () {
         let helo = &data.helo.to_string();
-        self.lookup(StatementLocation::Helo, strip_brackets(helo))
-            .await;
+        self.lookup(Location::Helo, strip_brackets(helo)).await;
     }
 
     pub async fn mail_from(&mut self, data: &SmficMail) -> () {
         let from = &data.args[0].to_string();
-        self.lookup(StatementLocation::MailFrom, strip_brackets(from))
-            .await;
+        self.lookup(Location::MailFrom, strip_brackets(from)).await;
     }
 
     pub async fn header(&mut self, data: &SmficHeader) -> () {
@@ -129,11 +142,11 @@ impl PolicyAccumulator {
         if let Ok((header, _)) = parse_header(&line) {
             let key = UniCase::new(header.get_key_ref());
             let location = if FROM.eq(&key) {
-                Some(StatementLocation::HeaderFrom)
+                Some(Location::HeaderFrom)
             } else if SENDER.eq(&key) {
-                Some(StatementLocation::HeaderSender)
+                Some(Location::HeaderSender)
             } else if REPLY_TO.eq(&key) {
-                Some(StatementLocation::HeaderReplyTo)
+                Some(Location::HeaderReplyTo)
             } else {
                 None
             };
@@ -158,11 +171,10 @@ impl PolicyAccumulator {
         }
     }
 
-    async fn statements_about(&self, s: &str) -> Vec<Statement> {
-        let entity = Entity::from_str(s).unwrap();
+    async fn statements_about(&self, entity: &Entity) -> Vec<Statement> {
         let storage = self.storage.read().await;
         storage
-            .find_statements_about(&entity)
+            .find_statements_about(entity)
             .await
             .unwrap()
             .into_iter()
@@ -176,5 +188,46 @@ fn strip_brackets(s: &str) -> &str {
         &s[1..s.len() - 1]
     } else {
         s
+    }
+}
+
+impl Location {
+    fn reason(&self) -> &'static str {
+        match self {
+            Location::Connect => "Connect information",
+            Location::Helo => "HELO string",
+            Location::MailFrom => "MAIL FROM",
+            Location::RcptTo => "RCPT TO",
+            Location::HeaderReceived => "\"Received\" header",
+            Location::HeaderFrom => "\"From\" header",
+            Location::HeaderReplyTo => "\"Reply-To\" header",
+            Location::HeaderSender => "\"Sender\" header",
+        }
+    }
+}
+
+impl Entity {
+    fn reason(&self) -> String {
+        match self {
+            Entity::Domain(domain) => format!("domain {:?}", domain),
+            Entity::EMail(address) => format!("address {:?}", address),
+            Entity::AS(asn) => format!("autonomous system AS{}", asn),
+            Entity::IPv4(addr) => format!("IP address {}", addr),
+            Entity::IPv6(addr) => format!("IP address {}", addr),
+            Entity::Signer(signer) => format!("signer {}", signer),
+            Entity::Url(url) => format!("URL {:?}", url),
+            Entity::HashValue(hash) => format!("hash value {:?}", hash),
+            Entity::Template(template) => format!("template {}", template),
+        }
+    }
+}
+
+impl Statement {
+    fn reason(&self) -> String {
+        match self.name.as_str() {
+            "spammer" => "spam source".into(),
+            "spammer_friendly" => "spammer friendly".into(),
+            _ => self.name.clone(),
+        }
     }
 }

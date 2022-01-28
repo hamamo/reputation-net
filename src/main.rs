@@ -1,13 +1,13 @@
-use futures::{StreamExt, AsyncBufReadExt};
-use std::iter::Iterator;
+#![feature(never_type)]
+
+use std::{error::Error, iter::Iterator};
 
 use async_std::{io, task::spawn};
 use futures::{
     channel::mpsc::{channel, Receiver, Sender},
-    select, SinkExt,
+    select, AsyncBufReadExt, SinkExt, StreamExt,
 };
 use log::{debug, info};
-use std::error::Error;
 
 use libp2p::{multiaddr::Protocol, swarm::SwarmEvent, Multiaddr, Swarm};
 
@@ -16,16 +16,17 @@ mod model;
 mod reputation_net;
 mod storage;
 
-use reputation_net::{ReputationNet, NetworkMessageWithPeerId};
+use reputation_net::{Message, ReputationNet};
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
+
     let (input_sender, input_receiver) = channel::<String>(5);
-    let (event_sender, event_receiver) = channel::<NetworkMessageWithPeerId>(100);
+    let (message_sender, message_receiver) = channel::<Message>(100);
 
     let mut swarm = {
-        let behaviour = ReputationNet::new(event_sender).await;
+        let behaviour = ReputationNet::new(message_sender).await;
         let transport = libp2p::development_transport(behaviour.local_key.clone()).await?;
         let local_peer_id = behaviour.local_peer_id();
 
@@ -59,14 +60,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     */
 
     let storage = swarm.behaviour().storage.clone();
-    spawn(network_loop(swarm, input_receiver, event_receiver));
+    spawn(network_loop(swarm, input_receiver, message_receiver));
 
     if let Some(command) = std::env::args().nth(1) {
         if command == "milter" {
             spawn(milter::run_milter(("0.0.0.0", 21000), storage));
         }
     }
-    
+
     input_reader(input_sender).await?;
     Ok(())
 }
@@ -90,7 +91,7 @@ async fn input_reader(mut sender: Sender<String>) -> Result<(), std::io::Error> 
 async fn network_loop(
     mut swarm: Swarm<ReputationNet>,
     mut input_receiver: Receiver<String>,
-    mut event_receiver: Receiver<NetworkMessageWithPeerId>,
+    mut message_receiver: Receiver<Message>,
 ) -> Result<(), std::io::Error> {
     loop {
         select! {
@@ -98,36 +99,31 @@ async fn network_loop(
                 info!("swarm event: {:?}", event);
                 match event {
                     Some(SwarmEvent::Behaviour(s)) => {
-                        swarm.behaviour_mut().handle_behaviour_event(s).await;
+                        swarm.behaviour_mut().handle_behaviour_event(s);
                     }
                     Some(SwarmEvent::ConnectionEstablished{peer_id, endpoint: _, num_established, concurrent_dial_errors: _}) => {
-                        info!("{:?}", event);
-                        swarm.behaviour_mut().handle_connection_established(peer_id, u32::from(num_established)).await;
+                        swarm.behaviour_mut().handle_connection_established(peer_id, u32::from(num_established));
                     }
                     Some(SwarmEvent::ConnectionClosed{peer_id, endpoint: _, num_established, cause: _}) => {
-                        info!("{:?}", event);
-                        swarm.behaviour_mut().handle_connection_closed(peer_id, num_established).await;
+                        swarm.behaviour_mut().handle_connection_closed(peer_id, num_established);
                     }
                     _ => ()
                 }
             },
             event = input_receiver.next() => {
-                info!("input: {:?}", event);
                 match event {
                     Some(s) => {
-                        debug!("stdin event: {:?}", s);
-                        swarm.behaviour_mut().handle_input(&s).await;
+                        swarm.behaviour_mut().handle_user_input(&s).await;
                     }
                     None => break Ok(())
                 }
             }
-            event = event_receiver.next() => {
+            event = message_receiver.next() => {
                 info!("network message: {:?}", event);
                 match event {
-                    Some(e) => {
-                        let (message, peer) = e;
+                    Some(message) => {
                         debug!("network event: {:?}", message);
-                        swarm.behaviour_mut().handle_network_message(message, peer).await;
+                        swarm.behaviour_mut().handle_message(message).await;
                     }
                     None => panic!("end of network?")
                 }

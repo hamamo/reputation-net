@@ -24,8 +24,8 @@ impl ProtocolName for RpcProtocol{
 #[async_trait]
 impl RequestResponseCodec for RpcCodec {
     type Protocol = RpcProtocol;
-    type Request = NetworkMessage;
-    type Response = NetworkMessage;
+    type Request = RpcRequest;
+    type Response = RpcResponse;
 
     async fn read_request<T>(
         &mut self,

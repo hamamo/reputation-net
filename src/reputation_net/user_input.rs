@@ -1,21 +1,14 @@
-use std::error::Error;
-use std::str::FromStr;
-use std::time::Instant;
+use std::{error::Error, str::FromStr, time::Instant};
 
-use log::error;
-#[allow(unused_imports)]
-use log::info;
+use log::{error, info};
 
-use crate::model::Date;
-use crate::model::Statement;
+use crate::model::{Date, Statement};
 
 /// functions handling user input (currently simple stdin, will be changed to handle readline and proper output)
-use super::ReputationNet;
-
-use super::Entity;
+use super::{Entity, ReputationNet};
 
 impl ReputationNet {
-    pub async fn handle_input(&mut self, what: &str) {
+    pub async fn handle_user_input(&mut self, what: &str) {
         /* for now, create opinions with default values. I don't know yet how the UI should look finally */
 
         if what.starts_with("!") {
@@ -45,7 +38,7 @@ impl ReputationNet {
                             actual_statement.id
                         );
                         let signed_statement = self.sign_statement(actual_statement).await.unwrap();
-                        self.publish_statement(signed_statement).await;
+                        self.publish_statement(signed_statement);
                     }
                     Err(_e) => {
                         error!("No matching template: {}", template);
@@ -93,7 +86,7 @@ impl ReputationNet {
                 } else {
                     Date::today()
                 };
-                info!("sending annouce for {}", date);
+                // println!("sending announce for {}", date);
                 self.announce_infos(date).await
             }
             _ => error!("unknown command: {}", command),

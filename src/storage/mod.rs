@@ -12,7 +12,9 @@ use sqlx::{
 };
 
 // own imports
-use crate::model::{Date, Entity, UnsignedOpinion, OwnKey, PublicKey, Opinion, Statement, Template};
+use crate::model::{
+    Date, Entity, Opinion, OwnKey, PublicKey, SignedStatement, Statement, Template, UnsignedOpinion,
+};
 
 mod schema;
 pub use schema::*;
@@ -246,6 +248,43 @@ impl Storage {
         Ok(opinions)
     }
 
+    pub async fn list_statements_named_signed(
+        &self,
+        name: &str,
+        date: Date,
+    ) -> Result<Vec<SignedStatement>, Error> {
+        // it would be nicer to use group_by() but that causes problems with async/await, so we use plain old for loops
+        let rows: Vec<DbStatementWithOpinion> =
+            sqlx::query_as::<DB, DbStatementWithOpinion>(&format!(
+            "select {} from {} where statement.name = ? and opinion.date = ? order by statement.id",
+            DbStatementWithOpinion::COLUMNS,
+            DbStatementWithOpinion::TABLE
+        ))
+            .bind(name)
+            .bind(date)
+            .fetch_all(&self.pool)
+            .await?;
+        let mut signed_statements: Vec<SignedStatement> = vec![];
+        let mut last_id = Id::new(0);
+        for row in rows {
+            let p_statement: Persistent<Statement> = row.statement.into();
+            let opinion = Opinion::from_using_storage(row.opinion, &self).await;
+            if p_statement.id == last_id {
+                let len = signed_statements.len();
+                let last = &mut signed_statements[len - 1];
+                last.opinions.push(opinion);
+            } else {
+                signed_statements.push(SignedStatement {
+                    statement: p_statement.data,
+                    opinions: vec![opinion],
+                });
+                last_id = p_statement.id
+            }
+        }
+        // println!("signed_statements: {:?}", signed_statements);
+        Ok(signed_statements)
+    }
+
     async fn try_select_statement(
         &self,
         name: &str,
@@ -349,7 +388,9 @@ impl Storage {
         .fetch_optional(&self.pool)
         .await?;
         if let Some((old_id, date, serial)) = prev_opinion_result {
-            if date < opinion_data.date || (date == opinion_data.date && serial < opinion_data.serial) {
+            if date < opinion_data.date
+                || (date == opinion_data.date && serial < opinion_data.serial)
+            {
                 // delete old, overridden opinion
                 sqlx::query("delete from opinion where id = ?")
                     .bind(old_id)

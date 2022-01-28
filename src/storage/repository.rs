@@ -16,7 +16,6 @@ use sqlx::TypeInfo;
 type PrimitiveId = i64;
 
 /// The Id<T> type using PhantomData to reference the identified type
-#[derive(Debug)]
 pub struct Id<T> {
     id: PrimitiveId,
     marker: PhantomData<T>,
@@ -50,17 +49,23 @@ pub trait Repository<T> {
     /// FkType describes the foreign keys that go into a database row (those are normally not included in T)
     type FkType;
 
-    /// retrieve an existing record by id
-    async fn get(&self, id: Id<T>) -> Result<Option<Persistent<T>>, sqlx::Error>;
-
-    /// get all records
-    async fn get_all(&self) -> Result<Vec<Persistent<T>>, sqlx::Error>;
-
     /// persist a record (find if old, insert if new)
     async fn persist(&mut self, data: T) -> Result<PersistResult<T>, sqlx::Error>;
 
     /// transform a database row into a record
     fn row_to_record(row: Self::RowType) -> Persistent<T>;
+}
+
+#[async_trait]
+pub trait Get<T> {
+    /// RowType describes the format of a database row
+    type RowType: RowType;
+
+    /// retrieve an existing record by id
+    async fn get(&self, id: Id<T>) -> Result<Option<Persistent<T>>, sqlx::Error>;
+
+    /// get all records
+    async fn get_all(&self) -> Result<Vec<Persistent<T>>, sqlx::Error>;
 }
 
 impl<T> Id<T> {
@@ -78,6 +83,12 @@ impl<T> Id<T> {
 impl<T> Display for Id<T> {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
         write!(f, "{}", self.id)
+    }
+}
+
+impl<T> std::fmt::Debug for Id<T> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+        write!(f, "<{}>", self.id)
     }
 }
 

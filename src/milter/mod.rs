@@ -22,7 +22,6 @@ mod policy;
 use packet::*;
 use policy::*;
 
-#[allow(dead_code)]
 pub struct Milter {
     input: BufReader<TcpStream>,
     output: BufWriter<TcpStream>,
@@ -47,7 +46,7 @@ pub async fn run_milter(
 }
 
 impl Milter {
-    async fn run_on(stream: TcpStream, storage: Arc<RwLock<Storage>>) -> Result<(), Error> {
+    async fn run_on(stream: TcpStream, storage: Arc<RwLock<Storage>>) -> Result<!, Error> {
         let mut milter = Self {
             input: BufReader::new(stream.clone()),
             output: BufWriter::new(stream),
@@ -58,14 +57,12 @@ impl Milter {
         result
     }
 
-    async fn run(&mut self) -> Result<(), Error> {
+    async fn run(&mut self) -> Result<!, Error> {
         loop {
             let command = self.read_command().await?;
             debug!("--> {:?}", command);
             self.handle_command(&command).await?;
         }
-        #[allow(unreachable_code)]
-        Ok(())
     }
 
     async fn read_command(&mut self) -> Result<Command, Error> {

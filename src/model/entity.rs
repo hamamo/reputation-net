@@ -35,7 +35,6 @@ pub enum Entity {
     IPv4(Ipv4Cidr),    // denotes an IPv4 address or address range
     IPv6(Ipv6Cidr),    // denotes an IPv4 address or address range
     Signer(PublicKey), // denotes a signer
-    #[allow(dead_code)]
     Url(String), // denotes an URL, for example a contact form
     HashValue(String), // hash of an e-mail or other data. may be used to cloak user data, or to secure URL contents
     Template(Template), // statement template to dynamically add new statement types
@@ -93,7 +92,6 @@ impl FromStr for EntityType {
 }
 
 impl Entity {
-    #[allow(dead_code)]
     pub fn hash_string(string: &str) -> Self {
         let digest = Sha2_256::digest(string.as_bytes());
         Self::HashValue(base64::encode(digest))

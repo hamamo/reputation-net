@@ -32,7 +32,6 @@ pub struct SignedStatement {
 }
 
 impl UnsignedOpinion {
-    #[allow(dead_code)]
     pub fn sign_using(self, statement_bytes: &Vec<u8>, keypair: &Keypair) -> Opinion {
         // return a signed version. If original is already signed, strip signature first
 

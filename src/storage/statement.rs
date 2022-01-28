@@ -6,48 +6,12 @@ use sqlx::Error;
 
 use crate::model::{Entity, Statement};
 
-use super::{DbStatement, Id, PersistResult, Persistent, Repository, Storage, DB, RowType};
+use super::{DbStatement, Id, PersistResult, Persistent, Repository, RowType, Storage, DB, Get};
 
 #[async_trait]
 impl Repository<Statement> for Storage {
     type RowType = DbStatement;
     type FkType = ();
-
-    async fn get(&self, id: Id<Statement>) -> Result<Option<Persistent<Statement>>, Error> {
-        debug!("DB: getting {} with id {}", Self::RowType::TABLE, id);
-        match sqlx::query_as::<DB, Self::RowType>(&format!(
-            "select {} from {} where id = ?",
-            Self::RowType::COLUMNS,
-            Self::RowType::TABLE
-        ))
-        .bind(id)
-        .fetch_one(&self.pool)
-        .await
-        {
-            Ok(row) => {
-                debug!("got row {:?}", row);
-                return Ok(Some(Self::row_to_record(row)));
-            }
-            Err(e) => {
-                error!("error fetching {} with id {}: {:?}", Self::RowType::TABLE, id, e);
-                Ok(None)
-            }
-        }
-    }
-
-    async fn get_all(&self) -> Result<Vec<Persistent<Statement>>, Error> {
-        let rows = sqlx::query_as::<DB, Self::RowType>(&format!(
-            "select {} from {}",
-            Self::RowType::COLUMNS,
-            Self::RowType::TABLE
-        ))
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows
-            .into_iter()
-            .map(|tuple| Self::row_to_record(tuple))
-            .collect())
-    }
 
     async fn persist(&mut self, statement: Statement) -> Result<PersistResult<Statement>, Error> {
         // ensure that the statement matches an existing template
@@ -127,5 +91,51 @@ impl Repository<Statement> for Storage {
                 entities,
             },
         }
+    }
+}
+
+#[async_trait]
+impl Get<Statement> for Storage {
+    type RowType = DbStatement;
+    
+    async fn get(&self, id: Id<Statement>) -> Result<Option<Persistent<Statement>>, Error> {
+        debug!("DB: getting {} with id {}", Self::RowType::TABLE, id);
+        match sqlx::query_as::<DB, Self::RowType>(&format!(
+            "select {} from {} where id = ?",
+            Self::RowType::COLUMNS,
+            Self::RowType::TABLE
+        ))
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await
+        {
+            Ok(row) => {
+                debug!("got row {:?}", row);
+                return Ok(Some(Self::row_to_record(row)));
+            }
+            Err(e) => {
+                error!(
+                    "error fetching {} with id {}: {:?}",
+                    Self::RowType::TABLE,
+                    id,
+                    e
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    async fn get_all(&self) -> Result<Vec<Persistent<Statement>>, Error> {
+        let rows = sqlx::query_as::<DB, Self::RowType>(&format!(
+            "select {} from {}",
+            Self::RowType::COLUMNS,
+            Self::RowType::TABLE
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|tuple| Self::row_to_record(tuple))
+            .collect())
     }
 }
