@@ -1,8 +1,9 @@
 #![feature(never_type)]
 
-use std::{error::Error, iter::Iterator};
+use std::error::Error;
 
 use async_std::{io, task::spawn};
+use clap::{Parser, Subcommand};
 use futures::{
     channel::mpsc::{channel, Receiver, Sender},
     select, AsyncBufReadExt, SinkExt, StreamExt,
@@ -18,9 +19,24 @@ mod storage;
 
 use reputation_net::{Message, ReputationNet};
 
+#[derive(Parser, Debug)]
+#[clap(author, version, about)]
+struct Args {
+    #[clap(short, long)]
+    peer: Option<String>,
+    #[clap(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    Milter { port: Option<u16> },
+}
+
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
+    let args = Args::parse();
 
     let (input_sender, input_receiver) = channel::<String>(5);
     let (message_sender, message_receiver) = channel::<Message>(100);
@@ -49,22 +65,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Dial the peer identified by the multi-address given as the second
-    // command-line argument, if any.
-    /*
-    if let Some(addr) = std::env::args().nth(1) {
+    // Dial the peer identified by the multi-address given on the command line.
+
+    if let Some(addr) = args.peer {
         let remote: Multiaddr = addr.parse()?;
+        println!("Dialing {}", remote);
         swarm.dial(remote)?;
-        info!("Dialing {}", addr)
     }
-    */
 
     let storage = swarm.behaviour().storage.clone();
     spawn(network_loop(swarm, input_receiver, message_receiver));
 
-    if let Some(command) = std::env::args().nth(1) {
-        if command == "milter" {
-            spawn(milter::run_milter(("0.0.0.0", 21000), storage));
+    if let Some(cmd) = args.command {
+        match cmd {
+            Commands::Milter { port } => {
+                let port = port.or(Some(21000)).unwrap();
+                println!("Running milter on port {}", port);
+                spawn(milter::run_milter(("0.0.0.0", port), storage));
+            }
         }
     }
 

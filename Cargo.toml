@@ -33,4 +33,4 @@ toml = "*"
 mailparse = "*"
 unicase = "*"
 lazy_static = "*"
-clap = "3"
+clap = { version = "3", features = ["derive"] }
