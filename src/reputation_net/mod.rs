@@ -479,15 +479,15 @@ impl ReputationNet {
     }
 
     pub fn handle_connection_established(&mut self, peer_id: PeerId, num_established: u32) {
-        info!(
-            "got connection to {:?} ({} connections)",
+        println!(
+            "got connection with peer {:?} ({} connections)",
             peer_id, num_established
         );
     }
 
     pub fn handle_connection_closed(&mut self, peer_id: PeerId, num_established: u32) {
-        info!(
-            "connection to {:?} was closed ({} connections)",
+        println!(
+            "connection with peer {:?} was closed ({} connections)",
             peer_id, num_established
         );
     }
