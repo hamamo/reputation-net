@@ -1,5 +1,3 @@
-#![feature(never_type)]
-
 use std::error::Error;
 
 use async_std::{io, task::spawn};
