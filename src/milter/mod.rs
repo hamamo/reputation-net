@@ -39,7 +39,7 @@ pub async fn run_milter(
     info!("got incoming stream: {:?}", incoming);
     while let Some(stream) = incoming.next().await {
         let stream = stream?;
-        info!("accepted connection from {:?}", stream.peer_addr());
+        println!("accepted connection from {:?}", stream.peer_addr());
         spawn(Milter::run_on(stream, storage.clone()));
     }
     Ok(())
@@ -53,7 +53,7 @@ impl Milter {
             policy: PolicyAccumulator::new(storage),
         };
         let result = milter.run().await;
-        debug!("milter run result: {:?}", result);
+        println!("milter run result: {:?}", result);
         result
     }
 

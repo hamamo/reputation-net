@@ -194,14 +194,14 @@ fn strip_brackets(s: &str) -> &str {
 impl Location {
     fn reason(&self) -> &'static str {
         match self {
-            Location::Connect => "Connect information",
-            Location::Helo => "HELO string",
+            Location::Connect => "CONNECT",
+            Location::Helo => "HELO",
             Location::MailFrom => "MAIL FROM",
             Location::RcptTo => "RCPT TO",
-            Location::HeaderReceived => "\"Received\" header",
-            Location::HeaderFrom => "\"From\" header",
-            Location::HeaderReplyTo => "\"Reply-To\" header",
-            Location::HeaderSender => "\"Sender\" header",
+            Location::HeaderReceived => "\"Received:\" header",
+            Location::HeaderFrom => "\"From:\" header",
+            Location::HeaderReplyTo => "\"Reply-To:\" header",
+            Location::HeaderSender => "\"Sender:\" header",
         }
     }
 }
@@ -227,6 +227,7 @@ impl Statement {
         match self.name.as_str() {
             "spammer" => "spam source".into(),
             "spammer_friendly" => "spammer friendly".into(),
+            "dynamic" => "dynamic/anonymous IP address".into(),
             _ => self.name.clone(),
         }
     }
