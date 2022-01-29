@@ -66,7 +66,12 @@ impl Repository<Statement> for Storage {
         };
         if result.name == "template" {
             if let Entity::Template(template) = &result.entities[0] {
-                self.templates.insert(result.id.clone(), template.clone());
+                self.templates.insert(result.id, template.clone());
+            }
+        }
+        if result.name == "signer" {
+            if let Entity::Signer(signer) = &result.entities[0] {
+                self.signers.insert(result.id, signer.clone());
             }
         }
         Ok(result)
