@@ -101,6 +101,7 @@ impl PolicyAccumulator {
         if let Ok(entity) = Entity::from_str(what) {
             let statements = self.statements_about(&entity).await;
             for statement in statements {
+                println!("milter match: {} in {} ({})", entity, location.reason(), statement);
                 self.severity = self.severity.max(statement.severity());
                 self.statements.push(Match {
                     location,
