@@ -329,7 +329,7 @@ impl ReputationNet {
         match response {
             RpcResponse::Statements(list) => {
                 for signed_statement in list {
-                    println!("got statement in response: {}", signed_statement);
+                    println!("got statement in response: {}", signed_statement.statement);
                     let mut storage = self.storage.write().await;
                     let statement_id = storage
                         .persist(signed_statement.statement)
