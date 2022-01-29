@@ -12,7 +12,7 @@ use futures::{
     io::{BufReader, BufWriter},
     AsyncReadExt, AsyncWriteExt, StreamExt,
 };
-use log::{info, debug, error};
+use log::{debug, error, info};
 
 use crate::storage::Storage;
 
@@ -39,7 +39,8 @@ pub async fn run_milter(
     info!("got incoming stream: {:?}", incoming);
     while let Some(stream) = incoming.next().await {
         let stream = stream?;
-        println!("accepted connection from {:?}", stream.peer_addr());
+        let peer_addr = stream.peer_addr()?;
+        info!("accepted connection from {:?}", peer_addr);
         spawn(Milter::run_on(stream, storage.clone()));
     }
     Ok(())
@@ -53,17 +54,15 @@ impl Milter {
             policy: PolicyAccumulator::new(storage),
         };
         let result = milter.run().await;
-        println!("milter run result: {:?}", result);
+        info!("milter run result: {:?}", result);
         result
     }
 
     async fn run(&mut self) -> Result<(), Error> {
-        loop {
-            let command = self.read_command().await?;
+        while let Ok(command) = self.read_command().await {
             debug!("--> {:?}", command);
             self.handle_command(&command).await?;
         }
-        #[allow(unreachable_code)]
         Ok(())
     }
 
