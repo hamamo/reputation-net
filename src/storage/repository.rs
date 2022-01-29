@@ -43,29 +43,24 @@ pub trait RowType {
 
 #[async_trait]
 pub trait Repository<T> {
-    /// RowType describes the format of a database row
-    type RowType: RowType;
-
-    /// FkType describes the foreign keys that go into a database row (those are normally not included in T)
-    type FkType;
-
     /// persist a record (find if old, insert if new)
     async fn persist(&mut self, data: T) -> Result<PersistResult<T>, sqlx::Error>;
-
-    /// transform a database row into a record
-    fn row_to_record(row: Self::RowType) -> Persistent<T>;
 }
 
 #[async_trait]
 pub trait Get<T> {
-    /// RowType describes the format of a database row
-    type RowType: RowType;
-
     /// retrieve an existing record by id
     async fn get(&self, id: Id<T>) -> Result<Option<Persistent<T>>, sqlx::Error>;
 
     /// get all records
     async fn get_all(&self) -> Result<Vec<Persistent<T>>, sqlx::Error>;
+}
+
+/// Convert an item of type F ito an item of type T.
+/// May involve additional database operations.
+#[async_trait]
+pub trait Convert<F, T> {
+    async fn convert(&self, from: F) -> Result<T, sqlx::Error>;
 }
 
 impl<T> Id<T> {

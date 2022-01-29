@@ -6,28 +6,28 @@ use crate::model::{Date, SignedStatement};
 
 use crate::storage::SyncInfos;
 
-/// A number of responses can be sent in response to gossipsub requests, so technically they are sent as requests.
-/// It's easiest to just keep both in one type.
-
+/// Broadcast messages are sent using GossipSub to all peers in the network
 #[derive(Debug, Serialize, Deserialize)]
 pub enum BroadcastMessage {
-    TemplateRequest,
     Announcement(SyncInfos),
-    OpinionRequest { name: String, date: Date },
     Statement(SignedStatement),
 }
 
+/// Rpc requests are sent to a specific peer in reaction to some event (announcement or connection establishment)
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RpcRequest {
+    TemplateRequest,
     OpinionRequest { name: String, date: Date },
 }
 
+/// Rpc responses are only sent in response to rpc requests
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RpcResponse {
     None,
     Statements(Vec<SignedStatement>),
 }
 
+/// This enum is used to communicate broadcast and rpc messages from the receiving NetworkBehaviour to the central dispatch
 #[derive(Debug)]
 pub enum Message {
     Broadcast {

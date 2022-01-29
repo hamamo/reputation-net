@@ -6,13 +6,12 @@ use sqlx::Error;
 
 use crate::model::{Entity, Statement};
 
-use super::{DbStatement, Id, PersistResult, Persistent, Repository, RowType, Storage, DB, Get};
+use super::{
+    Convert, DbStatement, Get, Id, PersistResult, Persistent, Repository, RowType, Storage, DB,
+};
 
 #[async_trait]
 impl Repository<Statement> for Storage {
-    type RowType = DbStatement;
-    type FkType = ();
-
     async fn persist(&mut self, statement: Statement) -> Result<PersistResult<Statement>, Error> {
         // ensure that the statement matches an existing template
         if !self.has_matching_template(&statement) {
@@ -72,51 +71,30 @@ impl Repository<Statement> for Storage {
         }
         Ok(result)
     }
-
-    fn row_to_record(row: Self::RowType) -> Persistent<Statement> {
-        let mut entities = vec![Entity::from_str(&row.entity_1.as_str()).unwrap()];
-        if let Some(entity) = row.entity_2 {
-            entities.push(Entity::from_str(&entity.as_str()).unwrap())
-        }
-        if let Some(entity) = row.entity_3 {
-            entities.push(Entity::from_str(&entity.as_str()).unwrap())
-        }
-        if let Some(entity) = row.entity_4 {
-            entities.push(Entity::from_str(&entity.as_str()).unwrap())
-        }
-        Persistent {
-            id: row.id,
-            data: Statement {
-                name: row.name,
-                entities,
-            },
-        }
-    }
 }
 
 #[async_trait]
 impl Get<Statement> for Storage {
-    type RowType = DbStatement;
-    
     async fn get(&self, id: Id<Statement>) -> Result<Option<Persistent<Statement>>, Error> {
-        debug!("DB: getting {} with id {}", Self::RowType::TABLE, id);
-        match sqlx::query_as::<DB, Self::RowType>(&format!(
+        debug!("DB: getting {} with id {}", DbStatement::TABLE, id);
+        match sqlx::query_as::<DB, DbStatement>(&format!(
             "select {} from {} where id = ?",
-            Self::RowType::COLUMNS,
-            Self::RowType::TABLE
+            DbStatement::COLUMNS,
+            DbStatement::TABLE
         ))
         .bind(id)
         .fetch_one(&self.pool)
         .await
         {
-            Ok(row) => {
-                debug!("got row {:?}", row);
-                return Ok(Some(Self::row_to_record(row)));
+            Ok(db_row) => {
+                debug!("got DB row {:?}", db_row);
+                let row = self.convert(db_row).await?;
+                return Ok(Some(row));
             }
             Err(e) => {
                 error!(
                     "error fetching {} with id {}: {:?}",
-                    Self::RowType::TABLE,
+                    DbStatement::TABLE,
                     id,
                     e
                 );
@@ -126,16 +104,40 @@ impl Get<Statement> for Storage {
     }
 
     async fn get_all(&self) -> Result<Vec<Persistent<Statement>>, Error> {
-        let rows = sqlx::query_as::<DB, Self::RowType>(&format!(
+        let rows = sqlx::query_as::<DB, DbStatement>(&format!(
             "select {} from {}",
-            Self::RowType::COLUMNS,
-            Self::RowType::TABLE
+            DbStatement::COLUMNS,
+            DbStatement::TABLE
         ))
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows
-            .into_iter()
-            .map(|tuple| Self::row_to_record(tuple))
-            .collect())
+        let mut list = vec![];
+        for db_row in rows {
+            list.push(self.convert(db_row).await?)
+        }
+        Ok(list)
+    }
+}
+
+#[async_trait]
+impl Convert<DbStatement, Persistent<Statement>> for Storage {
+    async fn convert(&self, from: DbStatement) -> Result<Persistent<Statement>, Error> {
+        let mut entities = vec![Entity::from_str(from.entity_1.as_str()).unwrap()];
+        if let Some(entity) = from.entity_2 {
+            entities.push(Entity::from_str(entity.as_str()).unwrap())
+        }
+        if let Some(entity) = from.entity_3 {
+            entities.push(Entity::from_str(entity.as_str()).unwrap())
+        }
+        if let Some(entity) = from.entity_4 {
+            entities.push(Entity::from_str(entity.as_str()).unwrap())
+        }
+        Ok(Persistent {
+            id: from.id,
+            data: Statement {
+                name: from.name.clone(),
+                entities,
+            },
+        })
     }
 }

@@ -192,26 +192,10 @@ impl Storage {
                 .await?
             }
         };
-        let statements = rows
-            .iter()
-            .map(|row| {
-                let mut entities = vec![Entity::from_str(&row.entity_1).unwrap()];
-                if let Some(entity) = &row.entity_2 {
-                    entities.push(Entity::from_str(&entity).unwrap())
-                }
-                if let Some(entity) = &row.entity_3 {
-                    entities.push(Entity::from_str(&entity).unwrap())
-                }
-                if let Some(entity) = &row.entity_4 {
-                    entities.push(Entity::from_str(&entity).unwrap())
-                }
-
-                row.id.with(Statement {
-                    name: row.name.to_string(),
-                    entities: entities,
-                })
-            })
-            .collect();
+        let mut statements = vec![];
+        for db_row in rows {
+            statements.push(self.convert(db_row).await?)
+        }
         Ok(statements)
     }
 
@@ -517,7 +501,14 @@ impl Storage {
         &self.own_key
     }
 
-    /* Clean up opinions which are not valid anymore. */
+    /// Refresh opinions that would expire soon but should still be valid.
+    /// Currently only refreshes templates.
+    /// Returns a list of statements to be published to the network.
+    pub async fn refresh_opinions(&self) -> Result<Vec<SignedStatement>, Error> {
+        Ok(vec![])
+    }
+
+    /// Clean up opinions which are not valid anymore.
     pub async fn cleanup_opinions(&self) -> Result<(), Error> {
         sqlx::query("delete from opinion where date + valid < ?")
             .bind(Date::today())

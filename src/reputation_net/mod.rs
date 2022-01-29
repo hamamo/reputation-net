@@ -262,28 +262,6 @@ impl ReputationNet {
                     Err(e) => error!("No matching template: {:?}", e),
                 }
             }
-            BroadcastMessage::TemplateRequest => {
-                let entities = self
-                    .storage
-                    .read()
-                    .await
-                    .list_all_templates()
-                    .await
-                    .unwrap();
-                let key = self.storage.read().await.own_key().key.clone();
-                for entity in entities {
-                    let statement = Statement {
-                        name: "template".into(),
-                        entities: vec![entity],
-                    };
-                    let opinion = UnsignedOpinion::default();
-                    let signed_statement = SignedStatement {
-                        opinions: vec![opinion.sign_using(&statement.signable_bytes(), &key)],
-                        statement: statement,
-                    };
-                    self.publish_statement(signed_statement);
-                }
-            }
             BroadcastMessage::Announcement(infos) => {
                 let requested_updates = self.sync_state.add_infos(&peer_id, &infos).await;
                 for t_name in requested_updates {
@@ -295,13 +273,6 @@ impl ReputationNet {
                         },
                     )
                 }
-            }
-            BroadcastMessage::OpinionRequest { name, date } => {
-                // answer with all opinions with the given name and start date
-                println!(
-                    "peer {} wants opinions on {} (date: {})",
-                    peer_id, name, date
-                );
             }
         }
     }
@@ -323,6 +294,30 @@ impl ReputationNet {
                         RpcResponse::None
                     }
                 }
+            }
+            RpcRequest::TemplateRequest => {
+                let entities = self
+                    .storage
+                    .read()
+                    .await
+                    .list_all_templates()
+                    .await
+                    .unwrap();
+                let key = self.storage.read().await.own_key().key.clone();
+                let mut statements = vec![];
+                for entity in entities {
+                    let statement = Statement {
+                        name: "template".into(),
+                        entities: vec![entity],
+                    };
+                    let opinion = UnsignedOpinion::default();
+                    let signed_statement = SignedStatement {
+                        opinions: vec![opinion.sign_using(&statement.signable_bytes(), &key)],
+                        statement: statement,
+                    };
+                    statements.push(signed_statement);
+                }
+                RpcResponse::Statements(statements)
             }
         };
         // println!("sending response {:?}", response);
@@ -483,6 +478,7 @@ impl ReputationNet {
             "got connection with peer {:?} ({} connections)",
             peer_id, num_established
         );
+        self.post_message(&peer_id, RpcRequest::TemplateRequest)
     }
 
     pub fn handle_connection_closed(&mut self, peer_id: PeerId, num_established: u32) {
