@@ -89,6 +89,33 @@ impl Milter {
         Ok(())
     }
 
+    async fn write_policy_response(&mut self) -> Result<(), Error> {
+        match self.policy.severity() {
+            Severity::Reject => {
+                let response = Response::Replycode(SmficReplycode {
+                    smtpcode: 554,
+                    reason: CString::from(self.policy.reason()),
+                });
+                self.write_response(&response).await?;
+            }
+            Severity::None => self.write_response(&Response::Continue).await?,
+            Severity::Quarantine => {
+                let response = Response::Quarantine(SmficQuarantine {
+                    reason: CString::from(self.policy.reason()),
+                });
+                self.write_response(&response).await?;
+            }
+            Severity::Tempfail => {
+                let response = Response::Replycode(SmficReplycode {
+                    smtpcode: 457,
+                    reason: CString::from(self.policy.reason()),
+                });
+                self.write_response(&response).await?;
+            }
+        }
+        Ok(())
+    }
+
     fn reset(&mut self) {
         self.policy.reset();
     }
@@ -112,32 +139,12 @@ impl Milter {
             Command::Connect(connect) => self.policy.connect(connect).await,
             Command::Helo(helo) => self.policy.helo(helo).await,
             Command::Mail(mail) => self.policy.mail_from(mail).await,
+            Command::Rcpt(_rcpt) => {
+                return self.write_policy_response().await;
+            }
             Command::Header(header) => self.policy.header(header).await,
             Command::Eoh => {
-                match self.policy.severity() {
-                    Severity::Reject => {
-                        let response = Response::Replycode(SmficReplycode {
-                            smtpcode: 554,
-                            reason: CString::from(self.policy.reason()),
-                        });
-                        self.write_response(&response).await?;
-                    }
-                    Severity::None => self.write_response(&Response::Continue).await?,
-                    Severity::Quarantine => {
-                        let response = Response::Quarantine(SmficQuarantine {
-                            reason: CString::from(self.policy.reason()),
-                        });
-                        self.write_response(&response).await?;
-                    }
-                    Severity::Tempfail => {
-                        let response = Response::Replycode(SmficReplycode {
-                            smtpcode: 457,
-                            reason: CString::from(self.policy.reason()),
-                        });
-                        self.write_response(&response).await?;
-                    }
-                }
-                return Ok(());
+                return self.write_policy_response().await;
             }
             Command::BodyEob => self.reset(),
             Command::Quit => {
