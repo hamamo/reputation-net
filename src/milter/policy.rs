@@ -245,7 +245,7 @@ impl Statement {
     fn reason(&self) -> String {
         format!(
             "{} ({})",
-            self,
+            self.entities[0],
             match self.name.as_str() {
                 "spammer" => "reported as spam source",
                 "spammer_friendly" => "listed as spammer-friendly",
