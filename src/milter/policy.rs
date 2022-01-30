@@ -87,12 +87,16 @@ impl PolicyAccumulator {
             .find(|m| m.statement.severity() == self.severity)
         {
             Some(m) => {
-                format!(
-                    "{}: {} matches {}",
-                    m.location.reason(),
-                    m.entity.reason(),
-                    m.statement.reason()
-                )
+                if m.entity == m.statement.entities[0] {
+                    format!("{}: {}", m.location.reason(), m.statement.reason())
+                } else {
+                    format!(
+                        "{}: {} matches {}",
+                        m.location.reason(),
+                        m.entity.reason(),
+                        m.statement.reason()
+                    )
+                }
             }
             None => String::new(),
         }
