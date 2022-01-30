@@ -1,6 +1,7 @@
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use async_std::sync::RwLock;
+use cidr::Cidr;
 use lazy_static::lazy_static;
 use log::error;
 use mailparse::{addrparse_header, parse_header, MailAddr};
@@ -87,7 +88,7 @@ impl PolicyAccumulator {
         {
             Some(m) => {
                 format!(
-                    "{}: {} was reported as {}",
+                    "{}: {} matches {}",
                     m.location.reason(),
                     m.entity.reason(),
                     m.statement.reason()
@@ -101,7 +102,12 @@ impl PolicyAccumulator {
         if let Ok(entity) = Entity::from_str(what) {
             let statements = self.statements_about(&entity).await;
             for statement in statements {
-                println!("milter match: {} in {} ({})", entity, location.reason(), statement);
+                println!(
+                    "milter match: {} in {} ({})",
+                    entity,
+                    location.reason(),
+                    statement
+                );
                 self.severity = self.severity.max(statement.severity());
                 self.statements.push(Match {
                     location,
@@ -213,8 +219,20 @@ impl Entity {
             Entity::Domain(domain) => format!("domain {:?}", domain),
             Entity::EMail(address) => format!("address {:?}", address),
             Entity::AS(asn) => format!("autonomous system AS{}", asn),
-            Entity::IPv4(addr) => format!("IP address {}", addr),
-            Entity::IPv6(addr) => format!("IP address {}", addr),
+            Entity::IPv4(addr) => {
+                if addr.is_host_address() {
+                    format!("IP address {}", addr)
+                } else {
+                    format!("IP range {}", addr)
+                }
+            }
+            Entity::IPv6(addr) => {
+                if addr.is_host_address() {
+                    format!("IPv6 address {}", addr)
+                } else {
+                    format!("IPv6 range {}", addr)
+                }
+            }
             Entity::Signer(signer) => format!("signer {}", signer),
             Entity::Url(url) => format!("URL {:?}", url),
             Entity::HashValue(hash) => format!("hash value {:?}", hash),
@@ -225,11 +243,15 @@ impl Entity {
 
 impl Statement {
     fn reason(&self) -> String {
-        match self.name.as_str() {
-            "spammer" => "spam source".into(),
-            "spammer_friendly" => "spammer friendly".into(),
-            "dynamic" => "dynamic/anonymous IP address".into(),
-            _ => self.name.clone(),
-        }
+        format!(
+            "{} ({})",
+            self,
+            match self.name.as_str() {
+                "spammer" => "reported as spam source",
+                "spammer_friendly" => "listed as spammer-friendly",
+                "dynamic" => "listed as dynamic/anonymous network range",
+                _ => &self.name.as_str(),
+            }
+        )
     }
 }
