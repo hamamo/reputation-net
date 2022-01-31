@@ -122,8 +122,12 @@ impl Storage {
 
     pub fn has_matching_template(&self, statement: &Statement) -> bool {
         if statement.name == "template" {
-            // always accept templates to allow bootstrapping
-            return true;
+            if statement.entities.len() == 1 {
+                if let Entity::Template(_) = statement.entities[0] {
+                    // always accept templates to allow bootstrapping
+                    return true;
+                }
+            }
         }
         for (_id, template) in &self.templates {
             if statement.matches_template(&template) {
@@ -437,7 +441,7 @@ impl Storage {
         let asns = statements
             .iter()
             .filter_map(|x| {
-                if x.name == "asn" {
+                if x.name == "asn" && x.entities.len() > 1 {
                     Some(x.entities[1].clone())
                 } else {
                     None

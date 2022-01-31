@@ -38,7 +38,7 @@ impl Statement {
     }
 
     pub fn matches_template(&self, template: &Template) -> bool {
-        self.name == template.name && {
+        self.name == template.name && self.entities.len() == template.entity_types.len() && {
             for (entity, entity_type_list) in self.entities.iter().zip(template.entity_types.iter())
             {
                 let entity_type = &entity.entity_type();
