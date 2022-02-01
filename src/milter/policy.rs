@@ -107,11 +107,15 @@ impl PolicyAccumulator {
         if let Ok(entity) = Entity::from_str(what) {
             let statements = self.statements_about(&entity).await;
             if statements.len() == 0 {
-                println!("milter no match for {} in {}", entity, location.reason());
+                // println!("milter no match for {} in {}", entity, location.reason());
             }
             for statement in statements {
                 println!(
-                    "milter match: {} in {} ({})",
+                    "{}: {} in {} ({})",
+                    match &self.macros.get("i") {
+                        Some(s) => s,
+                        None => "NOQUEUE",
+                    },
                     entity,
                     location.reason(),
                     statement
@@ -126,7 +130,11 @@ impl PolicyAccumulator {
         }
     }
 
-    pub async fn macros(&mut self, _data: &SmficMacro) -> () {}
+    pub async fn macros(&mut self, data: &SmficMacro) -> () {
+        for (key, value) in data.nameval.iter() {
+            self.macros.insert(key.to_string(), value.to_string());
+        }
+    }
 
     pub async fn connect(&mut self, data: &SmficConnect) -> () {
         self.lookup(Location::Connect, &data.hostname.to_string())
