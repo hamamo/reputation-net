@@ -5,6 +5,7 @@ use cidr::Cidr;
 use lazy_static::lazy_static;
 use log::error;
 use mailparse::{addrparse_header, parse_header, MailAddr};
+use regex::Regex;
 use unicase::UniCase;
 
 use crate::{
@@ -105,6 +106,9 @@ impl PolicyAccumulator {
     async fn lookup(&mut self, location: Location, what: &str) {
         if let Ok(entity) = Entity::from_str(what) {
             let statements = self.statements_about(&entity).await;
+            if statements.len() == 0 {
+                println!("milter no match for {} in {}", entity, location.reason());
+            }
             for statement in statements {
                 println!(
                     "milter match: {} in {} ({})",
@@ -146,6 +150,7 @@ impl PolicyAccumulator {
             static ref FROM: UniCase<&'static str> = UniCase::new("from");
             static ref SENDER: UniCase<&'static str> = UniCase::new("sender");
             static ref REPLY_TO: UniCase<&'static str> = UniCase::new("reply-to");
+            static ref RECEIVED: UniCase<&'static str> = UniCase::new("received");
         }
         let mut line = data.name.bytes.clone();
         line.extend(&b": ".to_vec());
@@ -158,24 +163,38 @@ impl PolicyAccumulator {
                 Some(Location::HeaderSender)
             } else if REPLY_TO.eq(&key) {
                 Some(Location::HeaderReplyTo)
+            } else if RECEIVED.eq(&key) {
+                Some(Location::HeaderReceived)
             } else {
                 None
             };
-            if let Some(location) = location {
-                if let Ok(addrlist) = addrparse_header(&header) {
-                    for addr in addrlist.iter() {
-                        match addr {
-                            MailAddr::Single(info) => {
-                                self.lookup(location, &info.addr).await;
-                            }
-                            MailAddr::Group(info) => {
-                                for single in &info.addrs {
-                                    self.lookup(location, &single.addr).await;
+            match location {
+                Some(Location::HeaderReceived) => {
+                    lazy_static! {
+                        static ref REGEX: Regex =
+                            Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap();
+                    }
+                    for m in REGEX.find_iter(header.get_value().as_str()) {
+                        self.lookup(Location::HeaderReceived, m.as_str()).await;
+                    }
+                }
+                Some(location) => {
+                    if let Ok(addrlist) = addrparse_header(&header) {
+                        for addr in addrlist.iter() {
+                            match addr {
+                                MailAddr::Single(info) => {
+                                    self.lookup(location, &info.addr).await;
+                                }
+                                MailAddr::Group(info) => {
+                                    for single in &info.addrs {
+                                        self.lookup(location, &single.addr).await;
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                None => (),
             }
         } else {
             error!("could not parse header {}", data);

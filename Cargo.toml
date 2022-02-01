@@ -34,3 +34,4 @@ mailparse = "*"
 unicase = "*"
 lazy_static = "*"
 clap = { version = "3", features = ["derive"] }
+regex = "1"

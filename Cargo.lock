@@ -2513,6 +2513,7 @@ dependencies = [
  "nom-bufreader",
  "once_cell",
  "percent-encoding",
+ "regex",
  "serde",
  "serde_json",
  "sha2 0.10.1",
