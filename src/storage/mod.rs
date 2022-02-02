@@ -508,6 +508,7 @@ impl Storage {
     /// Refresh opinions that would expire soon but should still be valid.
     /// Currently only refreshes templates.
     /// Returns a list of statements to be published to the network.
+    #[allow(dead_code)]
     pub async fn refresh_opinions(&self) -> Result<Vec<SignedStatement>, Error> {
         Ok(vec![])
     }

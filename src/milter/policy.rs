@@ -31,9 +31,11 @@ enum Location {
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Severity {
     None = 0,
+    #[allow(dead_code)]
     Quarantine = 1,
     Tempfail = 2,
     Reject = 3,
+    Known = 4
 }
 
 struct Match {
@@ -54,8 +56,9 @@ impl Statement {
         match self.name.as_str() {
             "spammer" => Severity::Reject,
             "exploited" => Severity::Reject,
-            "spammer_friendly" => Severity::Quarantine,
+            "spammer_friendly" => Severity::Tempfail,
             "dynamic" => Severity::Tempfail,
+            "known" => Severity::Known,
             _ => Severity::None,
         }
     }

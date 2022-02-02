@@ -90,30 +90,22 @@ impl Milter {
     }
 
     async fn write_policy_response(&mut self) -> Result<(), Error> {
-        match self.policy.severity() {
-            Severity::Reject => {
-                let response = Response::Replycode(SmficReplycode {
-                    smtpcode: 554,
-                    reason: CString::from(self.policy.reason()),
-                });
-                self.write_response(&response).await?;
-            }
-            Severity::None => self.write_response(&Response::Continue).await?,
-            Severity::Quarantine => {
-                let response = Response::Quarantine(SmficQuarantine {
-                    reason: CString::from(self.policy.reason()),
-                });
-                self.write_response(&response).await?;
-            }
-            Severity::Tempfail => {
-                let response = Response::Replycode(SmficReplycode {
-                    smtpcode: 457,
-                    reason: CString::from(self.policy.reason()),
-                });
-                self.write_response(&response).await?;
-            }
-        }
-        Ok(())
+        let response = match self.policy.severity() {
+            Severity::Known => Response::Accept,
+            Severity::Reject => Response::Replycode(SmficReplycode {
+                smtpcode: 554,
+                reason: CString::from(self.policy.reason()),
+            }),
+            Severity::None => Response::Continue,
+            Severity::Quarantine => Response::Quarantine(SmficQuarantine {
+                reason: CString::from(self.policy.reason()),
+            }),
+            Severity::Tempfail => Response::Replycode(SmficReplycode {
+                smtpcode: 457,
+                reason: CString::from(self.policy.reason()),
+            }),
+        };
+        self.write_response(&response).await
     }
 
     fn reset(&mut self) {
