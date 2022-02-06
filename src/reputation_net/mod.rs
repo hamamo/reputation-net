@@ -1,6 +1,6 @@
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use async_std::sync::RwLock;
+use tokio::sync::RwLock;
 
 use futures::channel::mpsc::Sender;
 use libp2p::{gossipsub::TopicHash, request_response::ResponseChannel};

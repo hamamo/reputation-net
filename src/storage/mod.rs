@@ -585,25 +585,31 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
-    use futures::executor::block_on;
-    use std::str::FromStr;
-
     use super::*;
+    use sqlx::{sqlite::SqliteConnection, Connection};
+    use std::str::FromStr;
+    use tokio::runtime::Runtime;
 
     #[test]
     fn lookup_statement() {
-        let mut storage = block_on(Storage::new());
-        block_on(storage.initialize_database()).expect("could initialize database");
+        let rt = Runtime::new().unwrap();
+        let handle = rt.handle();
+
+        let mut storage = handle.block_on(Storage::new());
+        handle
+            .block_on(storage.initialize_database())
+            .expect("could initialize database");
         let statement = Statement::from_str("template(template(Template))").unwrap();
-        let persist_result = block_on(storage.persist(statement)).unwrap();
+        let persist_result = handle.block_on(storage.persist(statement)).unwrap();
         assert!(persist_result.id >= Id::new(1));
     }
 
     #[test]
     fn test_sqlite() {
-        use sqlx::{sqlite::SqliteConnection, Connection};
+        let rt = Runtime::new().unwrap();
+        let handle = rt.handle();
 
-        let res = block_on(SqliteConnection::connect(DATABASE_URL));
+        let res = handle.block_on(SqliteConnection::connect(DATABASE_URL));
         match res {
             Ok(_conn) => assert!(true),
             _ => assert!(false, "{:?}", res),

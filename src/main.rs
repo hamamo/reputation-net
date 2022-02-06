@@ -1,20 +1,22 @@
 use std::error::Error;
+use tokio::spawn;
 
-use async_std::{io, task::spawn};
 use clap::{Parser, Subcommand};
 use futures::{
-    channel::mpsc::{channel, Receiver, Sender},
-    select, AsyncBufReadExt, SinkExt, StreamExt,
+    channel::mpsc::{channel, Receiver},
+    select, StreamExt,
 };
 use log::{debug, info};
 
 use libp2p::{multiaddr::Protocol, swarm::SwarmEvent, Multiaddr, Swarm};
 
+mod input_reader;
 mod milter;
 mod model;
 mod reputation_net;
 mod storage;
 
+use input_reader::input_reader;
 use reputation_net::{Message, ReputationNet};
 
 #[derive(Parser, Debug)]
@@ -31,7 +33,7 @@ enum Commands {
     Milter { port: Option<u16> },
 }
 
-#[async_std::main]
+#[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
     let args = Args::parse();
@@ -86,22 +88,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     input_reader(input_sender).await?;
     Ok(())
-}
-
-async fn input_reader(mut sender: Sender<String>) -> Result<(), std::io::Error> {
-    let mut stdin = io::BufReader::new(io::stdin()).lines();
-    loop {
-        match stdin.next().await {
-            Some(result) => {
-                let line = result?;
-                sender.send(line).await.expect("could send");
-            }
-            None => {
-                println!("EOF on stdin");
-                return Ok(());
-            }
-        }
-    }
 }
 
 async fn network_loop(

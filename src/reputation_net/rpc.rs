@@ -1,8 +1,8 @@
-use async_std::io::{Result};
 use async_trait::async_trait;
+use tokio::io::Result;
 
+use libp2p::core::upgrade::{read_length_prefixed, write_length_prefixed};
 use libp2p::request_response::*;
-use libp2p::core::upgrade::{read_length_prefixed,write_length_prefixed};
 
 use super::messages::*;
 
@@ -15,7 +15,7 @@ pub enum RpcProtocol {
     Version1,
 }
 
-impl ProtocolName for RpcProtocol{
+impl ProtocolName for RpcProtocol {
     fn protocol_name(&self) -> &[u8] {
         b"/reputation-net/1.0"
     }

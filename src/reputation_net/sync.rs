@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use async_std::sync::RwLock;
+use tokio::sync::RwLock;
 use libp2p::PeerId;
 use log::info;
 

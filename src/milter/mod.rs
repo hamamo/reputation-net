@@ -2,16 +2,16 @@ use std::{
     io::{Error, ErrorKind},
     sync::Arc,
 };
-
-use async_std::{
-    net::{TcpListener, TcpStream, ToSocketAddrs},
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
+    net::{
+        tcp::{ReadHalf, WriteHalf},
+        TcpListener, TcpStream, ToSocketAddrs,
+    },
+    spawn,
     sync::RwLock,
-    task::spawn,
 };
-use futures::{
-    io::{BufReader, BufWriter},
-    AsyncReadExt, AsyncWriteExt, StreamExt,
-};
+
 use log::{debug, error, info};
 
 use crate::storage::Storage;
@@ -22,9 +22,9 @@ mod policy;
 use packet::*;
 use policy::*;
 
-pub struct Milter {
-    input: BufReader<TcpStream>,
-    output: BufWriter<TcpStream>,
+pub struct Milter<'a> {
+    input: BufReader<ReadHalf<'a>>,
+    output: BufWriter<WriteHalf<'a>>,
     policy: PolicyAccumulator,
 }
 
@@ -35,22 +35,19 @@ pub async fn run_milter(
     info!("starting milter listener on {:?}", addr);
     let listener = TcpListener::bind(addr).await?;
     info!("got listener: {:?}", listener);
-    let mut incoming = listener.incoming();
-    info!("got incoming stream: {:?}", incoming);
-    while let Some(stream) = incoming.next().await {
-        let stream = stream?;
-        let peer_addr = stream.peer_addr()?;
+    while let Ok((stream, peer_addr)) = listener.accept().await {
         info!("accepted connection from {:?}", peer_addr);
         spawn(Milter::run_on(stream, storage.clone()));
     }
     Ok(())
 }
 
-impl Milter {
-    async fn run_on(stream: TcpStream, storage: Arc<RwLock<Storage>>) -> Result<(), Error> {
-        let mut milter = Self {
-            input: BufReader::new(stream.clone()),
-            output: BufWriter::new(stream),
+impl<'a> Milter<'a> {
+    async fn run_on(mut stream: TcpStream, storage: Arc<RwLock<Storage>>) -> Result<(), Error> {
+        let (inner_reader, inner_writer) = stream.split();
+        let mut milter = Milter {
+            input: BufReader::new(inner_reader),
+            output: BufWriter::new(inner_writer),
             policy: PolicyAccumulator::new(storage),
         };
         let result = milter.run().await;
@@ -140,7 +137,7 @@ impl Milter {
             }
             Command::BodyEob => self.reset(),
             Command::Quit => {
-                return self.output.close().await;
+                return self.output.shutdown().await;
             }
             Command::Abort => {
                 self.reset();

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, str::FromStr, sync::Arc};
 
-use async_std::sync::RwLock;
+use tokio::sync::RwLock;
 use cidr::Cidr;
 use lazy_static::lazy_static;
 use log::error;

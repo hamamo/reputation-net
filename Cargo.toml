@@ -14,11 +14,12 @@ cidr = "*"
 sha2 = "*"
 chrono = { version = "*", features = ["clock"] }
 base64 = "*"
-async-std = { version = "*", features = ["attributes"] }
+tokio = { version = "1", features = ["macros", "io-std"] }
+tokio-stream = "*"
 async-trait = "*"
 once_cell = "*"
 libsqlite3-sys = "*"
-sqlx = { version = "*", features = ["runtime-async-std-rustls", "sqlite"] }
+sqlx = { version = "*", features = ["runtime-tokio-rustls", "sqlite"] }
 percent-encoding = "*"
 nom = "7"
 nom-bufreader = "*"
