@@ -593,23 +593,21 @@ mod tests {
     #[test]
     fn lookup_statement() {
         let rt = Runtime::new().unwrap();
-        let handle = rt.handle();
 
-        let mut storage = handle.block_on(Storage::new());
-        handle
+        let mut storage = rt.block_on(Storage::new());
+        rt
             .block_on(storage.initialize_database())
             .expect("could initialize database");
         let statement = Statement::from_str("template(template(Template))").unwrap();
-        let persist_result = handle.block_on(storage.persist(statement)).unwrap();
+        let persist_result = rt.block_on(storage.persist(statement)).unwrap();
         assert!(persist_result.id >= Id::new(1));
     }
 
     #[test]
     fn test_sqlite() {
         let rt = Runtime::new().unwrap();
-        let handle = rt.handle();
 
-        let res = handle.block_on(SqliteConnection::connect(DATABASE_URL));
+        let res = rt.block_on(SqliteConnection::connect(DATABASE_URL));
         match res {
             Ok(_conn) => assert!(true),
             _ => assert!(false, "{:?}", res),

@@ -27,12 +27,16 @@ use super::model::{Entity, SignedStatement, Statement, UnsignedOpinion};
 use super::storage::Storage;
 
 mod messages;
-mod rpc;
-mod sync;
-mod user_input;
 pub use messages::*;
+
+mod rpc;
 use rpc::*;
+
+mod sync;
 use sync::*;
+
+mod user_input;
+pub use user_input::input_reader;
 
 #[derive(NetworkBehaviour)]
 #[behaviour(out_event = "OutEvent")]

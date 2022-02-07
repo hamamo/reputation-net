@@ -1,7 +1,7 @@
 use std::error::Error;
 use tokio::spawn;
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use futures::{
     channel::mpsc::{channel, Receiver},
     select, StreamExt,
@@ -10,27 +10,22 @@ use log::{debug, info};
 
 use libp2p::{multiaddr::Protocol, swarm::SwarmEvent, Multiaddr, Swarm};
 
-mod input_reader;
 mod milter;
 mod model;
 mod reputation_net;
 mod storage;
 
-use input_reader::input_reader;
-use reputation_net::{Message, ReputationNet};
+use reputation_net::{input_reader, Message, ReputationNet};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about)]
 struct Args {
     #[clap(short, long)]
-    peer: Option<String>,
-    #[clap(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand, Debug)]
-enum Commands {
-    Milter { port: Option<u16> },
+    dial: Option<String>,
+    #[clap(short, long)]
+    milter: Option<u16>,
+    #[clap(short, long)]
+    api: Option<u16>,
 }
 
 #[tokio::main]
@@ -67,7 +62,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Dial the peer identified by the multi-address given on the command line.
 
-    if let Some(addr) = args.peer {
+    if let Some(addr) = args.dial {
         let remote: Multiaddr = addr.parse()?;
         println!("Dialing {}", remote);
         swarm.dial(remote)?;
@@ -76,14 +71,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let storage = swarm.behaviour().storage.clone();
     spawn(network_loop(swarm, input_receiver, message_receiver));
 
-    if let Some(cmd) = args.command {
-        match cmd {
-            Commands::Milter { port } => {
-                let port = port.or(Some(21000)).unwrap();
-                println!("Running milter on port {}", port);
-                spawn(milter::run_milter(("0.0.0.0", port), storage));
-            }
-        }
+    if let Some(port) = args.milter {
+        println!("Running milter on port {}", port);
+        spawn(milter::run_milter(("0.0.0.0", port), storage));
     }
 
     input_reader(input_sender).await?;
