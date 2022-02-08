@@ -127,6 +127,7 @@ impl PolicyAccumulator {
                 });
             }
         } else {
+            /*
             println!(
                 "{}: milter could not parse {} as entity in {}",
                 match &self.macros.get("i") {
@@ -136,6 +137,7 @@ impl PolicyAccumulator {
                 what,
                 location
             );
+             */
         }
     }
 
