@@ -127,7 +127,15 @@ impl PolicyAccumulator {
                 });
             }
         } else {
-            println!("milter could not parse {} as entity", what);
+            println!(
+                "{}: milter could not parse {} as entity in {}",
+                match &self.macros.get("i") {
+                    Some(s) => s,
+                    None => "NOQUEUE",
+                },
+                what,
+                location
+            );
         }
     }
 
@@ -156,8 +164,10 @@ impl PolicyAccumulator {
 
     pub async fn header(&mut self, data: &SmficHeader) -> () {
         lazy_static! {
-            static ref IP_OR_DOMAIN_REGEX: Regex =
-                Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|([A-Za-z0-9-]{1, 63}\.)+[A-Za-z]{2,8}").unwrap();
+            static ref IP_OR_DOMAIN_REGEX: Regex = Regex::new(
+                r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|([A-Za-z0-9-]{1, 63}\.)+[A-Za-z]{2,8}"
+            )
+            .unwrap();
         }
         let mut line = data.name.bytes.clone();
         line.extend(&b": ".to_vec());
