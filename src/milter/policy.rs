@@ -1,12 +1,11 @@
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
 
-use tokio::sync::RwLock;
 use cidr::Cidr;
 use lazy_static::lazy_static;
 use log::error;
 use mailparse::{addrparse_header, parse_header, MailAddr};
 use regex::Regex;
-use unicase::UniCase;
+use tokio::sync::RwLock;
 
 use crate::{
     model::{Entity, Statement},
@@ -15,17 +14,14 @@ use crate::{
 
 use super::packet::*;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 enum Location {
     Connect,
     Helo,
     MailFrom,
     RcptTo,
-    HeaderReceived,
-    HeaderFrom,
-    HeaderReplyTo,
-    HeaderSender,
+    Header(String),
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
@@ -35,7 +31,7 @@ pub enum Severity {
     Quarantine = 1,
     Tempfail = 2,
     Reject = 3,
-    Known = 4
+    Known = 4,
 }
 
 struct Match {
@@ -92,11 +88,11 @@ impl PolicyAccumulator {
         {
             Some(m) => {
                 if m.entity == m.statement.entities[0] {
-                    format!("{}: {}", m.location.reason(), m.statement.reason())
+                    format!("{}: {}", m.location, m.statement.reason())
                 } else {
                     format!(
                         "{}: {} matches {}",
-                        m.location.reason(),
+                        m.location,
                         m.entity.reason(),
                         m.statement.reason()
                     )
@@ -106,11 +102,11 @@ impl PolicyAccumulator {
         }
     }
 
-    async fn lookup(&mut self, location: Location, what: &str) {
+    async fn lookup(&mut self, location: &Location, what: &str) {
         if let Ok(entity) = Entity::from_str(what) {
             let statements = self.statements_about(&entity).await;
             if statements.len() == 0 {
-                // println!("milter no match for {} in {}", entity, location.reason());
+                // println!("milter no match for {} in {}", entity, location);
             }
             for statement in statements {
                 println!(
@@ -120,16 +116,18 @@ impl PolicyAccumulator {
                         None => "NOQUEUE",
                     },
                     entity,
-                    location.reason(),
+                    location,
                     statement
                 );
                 self.severity = self.severity.max(statement.severity());
                 self.statements.push(Match {
-                    location,
+                    location: location.clone(),
                     entity: entity.clone(),
                     statement,
                 });
             }
+        } else {
+            println!("milter could not parse {} as entity", what);
         }
     }
 
@@ -140,72 +138,65 @@ impl PolicyAccumulator {
     }
 
     pub async fn connect(&mut self, data: &SmficConnect) -> () {
-        self.lookup(Location::Connect, &data.hostname.to_string())
+        self.lookup(&Location::Connect, &data.hostname.to_string())
             .await;
-        self.lookup(Location::Connect, &data.address.to_string())
+        self.lookup(&Location::Connect, &data.address.to_string())
             .await;
     }
 
     pub async fn helo(&mut self, data: &SmficHelo) -> () {
         let helo = &data.helo.to_string();
-        self.lookup(Location::Helo, strip_brackets(helo)).await;
+        self.lookup(&Location::Helo, strip_brackets(helo)).await;
     }
 
     pub async fn mail_from(&mut self, data: &SmficMail) -> () {
         let from = &data.args[0].to_string();
-        self.lookup(Location::MailFrom, strip_brackets(from)).await;
+        self.lookup(&Location::MailFrom, strip_brackets(from)).await;
     }
 
     pub async fn header(&mut self, data: &SmficHeader) -> () {
         lazy_static! {
-            static ref FROM: UniCase<&'static str> = UniCase::new("from");
-            static ref SENDER: UniCase<&'static str> = UniCase::new("sender");
-            static ref REPLY_TO: UniCase<&'static str> = UniCase::new("reply-to");
-            static ref RECEIVED: UniCase<&'static str> = UniCase::new("received");
+            static ref IP_OR_DOMAIN_REGEX: Regex =
+                Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|([A-Za-z0-9-]{1, 63}\.)+[A-Za-z]{2,8}").unwrap();
         }
         let mut line = data.name.bytes.clone();
         line.extend(&b": ".to_vec());
         line.extend(&data.value.bytes);
         if let Ok((header, _)) = parse_header(&line) {
-            let key = UniCase::new(header.get_key_ref());
-            let location = if FROM.eq(&key) {
-                Some(Location::HeaderFrom)
-            } else if SENDER.eq(&key) {
-                Some(Location::HeaderSender)
-            } else if REPLY_TO.eq(&key) {
-                Some(Location::HeaderReplyTo)
-            } else if RECEIVED.eq(&key) {
-                Some(Location::HeaderReceived)
-            } else {
-                None
-            };
-            match location {
-                Some(Location::HeaderReceived) => {
-                    lazy_static! {
-                        static ref REGEX: Regex =
-                            Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap();
-                    }
-                    for m in REGEX.find_iter(header.get_value().as_str()) {
-                        self.lookup(Location::HeaderReceived, m.as_str()).await;
+            let key = data.name.to_string();
+            let lower_key = key.to_ascii_lowercase();
+            let location = Location::Header(key.clone());
+            match lower_key.as_str() {
+                "received"
+                | "arc-authentication-results"
+                | "x-originatororg"
+                | "x-ms-exchange-authentication-results"
+                | "x-forefront-antispam-report"
+                | "x-ms-exchange-crosstenant-originalattributedtenantconnectingip" => {
+                    let header_value = header.get_value();
+                    let value = header_value.as_str();
+                    for m in IP_OR_DOMAIN_REGEX.find_iter(value) {
+                        // println!("{}: {}", key, m.as_str());
+                        self.lookup(&location, m.as_str()).await;
                     }
                 }
-                Some(location) => {
+                "from" | "reply-to" | "sender" => {
                     if let Ok(addrlist) = addrparse_header(&header) {
                         for addr in addrlist.iter() {
                             match addr {
                                 MailAddr::Single(info) => {
-                                    self.lookup(location, &info.addr).await;
+                                    self.lookup(&location, &info.addr).await;
                                 }
                                 MailAddr::Group(info) => {
                                     for single in &info.addrs {
-                                        self.lookup(location, &single.addr).await;
+                                        self.lookup(&location, &single.addr).await;
                                     }
                                 }
                             }
                         }
                     }
                 }
-                None => (),
+                _ => (),
             }
         } else {
             error!("could not parse header {}", data);
@@ -232,17 +223,14 @@ fn strip_brackets(s: &str) -> &str {
     }
 }
 
-impl Location {
-    fn reason(&self) -> &'static str {
+impl Display for Location {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Location::Connect => "CONNECT",
-            Location::Helo => "HELO",
-            Location::MailFrom => "MAIL FROM",
-            Location::RcptTo => "RCPT TO",
-            Location::HeaderReceived => "\"Received:\" header",
-            Location::HeaderFrom => "\"From:\" header",
-            Location::HeaderReplyTo => "\"Reply-To:\" header",
-            Location::HeaderSender => "\"Sender:\" header",
+            Location::Connect => write!(f, "CONNECT"),
+            Location::Helo => write!(f, "HELO"),
+            Location::MailFrom => write!(f, "MAIL FROM"),
+            Location::RcptTo => write!(f, "RCPT TO"),
+            Location::Header(key) => write!(f, "{:?} header", key),
         }
     }
 }
