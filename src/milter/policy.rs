@@ -111,7 +111,7 @@ impl PolicyAccumulator {
             for statement in statements {
                 let qid = match self.macros.get("i") {
                     Some(s) => s.clone(),
-                    None => "NOQUEUE".as_string(),
+                    None => "NOQUEUE".to_string(),
                 };
                 println!("{}: {} in {} ({})", qid, entity, location, statement);
                 // ignore dynamic IPs anywhere else than in CONNECT
