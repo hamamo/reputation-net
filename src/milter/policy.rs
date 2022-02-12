@@ -14,7 +14,7 @@ use crate::{
 
 use super::packet::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
 enum Location {
     Connect,
@@ -109,22 +109,20 @@ impl PolicyAccumulator {
                 // println!("milter no match for {} in {}", entity, location);
             }
             for statement in statements {
-                println!(
-                    "{}: {} in {} ({})",
-                    match &self.macros.get("i") {
-                        Some(s) => s,
-                        None => "NOQUEUE",
-                    },
-                    entity,
-                    location,
-                    statement
-                );
-                self.severity = self.severity.max(statement.severity());
-                self.statements.push(Match {
-                    location: location.clone(),
-                    entity: entity.clone(),
-                    statement,
-                });
+                let qid = match self.macros.get("i") {
+                    Some(s) => s.clone(),
+                    None => format!("NOQUEUE({})", self.macros.get("{client_addr}").unwrap()),
+                };
+                println!("{}: {} in {} ({})", qid, entity, location, statement);
+                // ignore dynamic IPs anywhere else than in CONNECT
+                if location == &Location::Connect || statement.name != "dynamic" {
+                    self.severity = self.severity.max(statement.severity());
+                    self.statements.push(Match {
+                        location: location.clone(),
+                        entity: entity.clone(),
+                        statement,
+                    });
+                }
             }
         } else {
             /*
@@ -160,8 +158,12 @@ impl PolicyAccumulator {
     }
 
     pub async fn mail_from(&mut self, data: &SmficMail) -> () {
-        let from = &data.args[0].to_string();
-        self.lookup(&Location::MailFrom, strip_brackets(from)).await;
+        let value = data.args[0].to_string();
+        let from = strip_brackets(&value);
+        self.lookup(&Location::MailFrom, &from).await;
+        if let Some(srs_from) = srs_unpack(&from) {
+            self.lookup(&Location::MailFrom, &srs_from).await;
+        }
     }
 
     pub async fn header(&mut self, data: &SmficHeader) -> () {
@@ -227,11 +229,28 @@ impl PolicyAccumulator {
     }
 }
 
+/// Strip angle brackets from an address.
 fn strip_brackets(s: &str) -> &str {
     if s.starts_with("<") && s.ends_with(">") {
         &s[1..s.len() - 1]
     } else {
         s
+    }
+}
+
+/// Unpack an SRS-encoded address.
+/// This only handles SRS0 format, the deeper nested SRS1 is almost never seen in the wild.
+fn srs_unpack(address: &str) -> Option<String> {
+    lazy_static! {
+        static ref SRS0_RE: Regex =
+            Regex::new("SRS0[+=][^=]+=[^=]+=([^=]+)=([^@]+)@([^@]+)").unwrap();
+    }
+    if let Some(cap) = SRS0_RE.captures(address) {
+        let inner_domain = cap.get(1).unwrap().as_str().to_string();
+        let inner_localpart = cap.get(2).unwrap().as_str().to_string();
+        Some(format!("{}@{}", inner_localpart, inner_domain))
+    } else {
+        None
     }
 }
 
@@ -267,6 +286,7 @@ impl Entity {
                     format!("IPv6 range {}", addr)
                 }
             }
+            // the following cases probably never appear in rejection reasons, but are handled for completeness
             Entity::Signer(signer) => format!("signer {}", signer),
             Entity::Url(url) => format!("URL {:?}", url),
             Entity::HashValue(hash) => format!("hash value {:?}", hash),

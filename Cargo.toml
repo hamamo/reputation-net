@@ -36,3 +36,5 @@ unicase = "*"
 lazy_static = "*"
 clap = { version = "3", features = ["derive"] }
 regex = "1"
+rocket = { version = "0.5.0-rc.1", features = ["json"] }
+anyhow = "1"

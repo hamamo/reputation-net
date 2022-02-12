@@ -1,3 +1,6 @@
+#![feature(proc_macro_hygiene, decl_macro)]
+#[macro_use] extern crate rocket;
+
 use std::error::Error;
 use tokio::spawn;
 
@@ -14,6 +17,7 @@ mod milter;
 mod model;
 mod reputation_net;
 mod storage;
+mod web;
 
 use reputation_net::{input_reader, Message, ReputationNet};
 
@@ -26,6 +30,8 @@ struct Args {
     milter: Option<u16>,
     #[clap(short, long)]
     api: Option<u16>,
+    #[clap(short, long)]
+    interactive: bool,
 }
 
 #[tokio::main]
@@ -68,15 +74,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
         swarm.dial(remote)?;
     }
 
-    let storage = swarm.behaviour().storage.clone();
-    spawn(network_loop(swarm, input_receiver, message_receiver));
+    
 
     if let Some(port) = args.milter {
         println!("Running milter on port {}", port);
+        let storage = swarm.behaviour().storage.clone();
         spawn(milter::run_milter(("0.0.0.0", port), storage));
     }
 
-    input_reader(input_sender).await?;
+    if let Some(port) = args.api {
+        println!("Running REST api on port {}", port);
+        let storage = swarm.behaviour().storage.clone();
+        spawn(web::api(port, storage));
+    }
+
+    if args.interactive {
+        spawn(input_reader(input_sender));
+    }
+
+    network_loop(swarm, input_receiver, message_receiver).await?;
+
     Ok(())
 }
 

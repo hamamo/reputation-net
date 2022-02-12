@@ -14,6 +14,9 @@ impl ReputationNet {
     pub async fn handle_user_input(&mut self, what: &str) {
         /* for now, create opinions with default values. I don't know yet how the UI should look finally */
 
+        if what == "" {
+            return;
+        }
         if what.starts_with("!") {
             return self.local_command(&what[1..]).await;
         }
