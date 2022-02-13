@@ -17,7 +17,7 @@ mod milter;
 mod model;
 mod reputation_net;
 mod storage;
-mod web;
+mod api;
 
 use reputation_net::{input_reader, Message, ReputationNet};
 
@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if let Some(port) = args.api {
         println!("Running REST api on port {}", port);
         let storage = swarm.behaviour().storage.clone();
-        spawn(web::api(port, storage));
+        spawn(api::api(port, storage));
     }
 
     if args.interactive {

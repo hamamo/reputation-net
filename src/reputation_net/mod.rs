@@ -3,28 +3,28 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 
 use futures::channel::mpsc::Sender;
-use libp2p::{gossipsub::TopicHash, request_response::ResponseChannel};
 use log::{error, info};
 
 use libp2p::{
-    gossipsub::{Gossipsub, GossipsubConfig, GossipsubEvent, IdentTopic, MessageAuthenticity},
+    autonat,
+    gossipsub::{
+        Gossipsub, GossipsubConfig, GossipsubEvent, IdentTopic, MessageAuthenticity, TopicHash,
+    },
+    identify::{Identify, IdentifyConfig, IdentifyEvent},
     identity::Keypair,
     mdns::{Mdns, MdnsConfig, MdnsEvent},
     ping::{Ping, PingConfig, PingEvent},
     request_response::{
         ProtocolSupport, RequestResponse, RequestResponseConfig, RequestResponseEvent,
-        RequestResponseMessage,
+        RequestResponseMessage, ResponseChannel,
     },
     NetworkBehaviour, PeerId,
 };
 
-use crate::{
-    model::Date,
-    storage::{PersistResult, Repository},
+use super::{
+    model::{Date, Entity, SignedStatement, Statement, UnsignedOpinion},
+    storage::{PersistResult, Repository, Storage},
 };
-
-use super::model::{Entity, SignedStatement, Statement, UnsignedOpinion};
-use super::storage::Storage;
 
 mod messages;
 pub use messages::*;
@@ -41,6 +41,8 @@ pub use user_input::input_reader;
 #[derive(NetworkBehaviour)]
 #[behaviour(out_event = "OutEvent")]
 pub struct ReputationNet {
+    identify: Identify,
+    autonat: autonat::Behaviour,
     mdns: Mdns,
     gossipsub: Gossipsub,
     ping: Ping,
@@ -58,10 +60,24 @@ pub struct ReputationNet {
 
 #[derive(Debug)]
 pub enum OutEvent {
+    Identify(IdentifyEvent),
+    Autonat(autonat::Event),
     Mdns(MdnsEvent),
     Gossipsub(GossipsubEvent),
     Ping(PingEvent),
     Rpc(RequestResponseEvent<RpcRequest, RpcResponse>),
+}
+
+impl From<IdentifyEvent> for OutEvent {
+    fn from(v: IdentifyEvent) -> Self {
+        Self::Identify(v)
+    }
+}
+
+impl From<autonat::Event> for OutEvent {
+    fn from(v: autonat::Event) -> Self {
+        Self::Autonat(v)
+    }
 }
 
 impl From<MdnsEvent> for OutEvent {
@@ -92,8 +108,29 @@ impl ReputationNet {
     pub async fn new(message_sender: Sender<Message>) -> Self {
         let storage = Storage::new().await;
         let keypair = storage.own_key().key.clone();
+        let local_peer_id = PeerId::from_public_key(&keypair.public());
         let storage = Arc::new(RwLock::new(storage));
         let mut repnet = Self {
+            autonat: autonat::Behaviour::new(
+                local_peer_id,
+                autonat::Config {
+                    timeout: Duration::from_secs(30),
+                    boot_delay: Duration::from_secs(5),
+                    refresh_interval: Duration::from_secs(600),
+                    retry_interval: Duration::from_secs(10),
+                    throttle_server_period: Duration::from_secs(120),
+                    use_connected: true,
+                    confidence_max: 5,
+                    max_peer_addresses: 10,
+                    throttle_clients_global_max: 5,
+                    throttle_clients_peer_max: 2,
+                    throttle_clients_period: Duration::from_secs(120),
+                },
+            ),
+            identify: Identify::new(IdentifyConfig::new(
+                "reputation-net/0.1.0".to_string(),
+                keypair.public(),
+            )),
             gossipsub: Gossipsub::new(
                 MessageAuthenticity::Signed(keypair.clone()),
                 GossipsubConfig::default(),
@@ -356,6 +393,12 @@ impl ReputationNet {
     pub fn handle_behaviour_event(&mut self, event: OutEvent) {
         info!("got behaviour event: {:?}", event);
         match event {
+            OutEvent::Identify(event) => {
+                println!("identify: {:?}", event)
+            }
+            OutEvent::Autonat(event) => {
+                println!("autonat: {:?}", event)
+            }
             OutEvent::Ping(event) => {
                 info!("ping event: {:?}", event);
             }

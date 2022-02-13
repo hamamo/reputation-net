@@ -17,7 +17,7 @@ pub enum RpcProtocol {
 
 impl ProtocolName for RpcProtocol {
     fn protocol_name(&self) -> &[u8] {
-        b"/reputation-net/1.0"
+        b"/reputation-net/0.1.0"
     }
 }
 
