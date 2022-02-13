@@ -394,7 +394,7 @@ impl ReputationNet {
         info!("got behaviour event: {:?}", event);
         match event {
             OutEvent::Identify(event) => {
-                println!("identify: {:?}", event)
+                // println!("identify: {:?}", event)
             }
             OutEvent::Autonat(event) => {
                 println!("autonat: {:?}", event)
