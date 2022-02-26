@@ -7,11 +7,11 @@ use sqlx::Error;
 use crate::model::{Entity, Statement};
 
 use super::{
-    Convert, DbStatement, Get, Id, PersistResult, Persistent, Repository, RowType, Storage, DB,
+    Convert, DbStatement, Get, GetRaw, Id, Persist, PersistResult, Persistent, RowType, Storage, DB,
 };
 
 #[async_trait]
-impl Repository<Statement> for Storage {
+impl Persist<Statement> for Storage {
     async fn persist(&mut self, statement: Statement) -> Result<PersistResult<Statement>, Error> {
         // ensure that the statement matches an existing template
         if !self.has_matching_template(&statement) {
@@ -66,15 +66,29 @@ impl Repository<Statement> for Storage {
         };
         if result.name == "template" {
             if let Entity::Template(template) = &result.entities[0] {
-                self.templates.insert(result.id, template.clone());
+                self.templates.insert(result.data.id, template.clone());
             }
         }
         if result.name == "signer" {
             if let Entity::Signer(signer) = &result.entities[0] {
-                self.signers.insert(result.id, signer.clone());
+                self.signers.insert(result.data.id, signer.clone());
             }
         }
         Ok(result)
+    }
+}
+
+#[async_trait]
+impl GetRaw<DbStatement, Id<Statement>> for Storage {
+    async fn get_raw(&self, id: Id<Statement>) -> Result<Option<DbStatement>, Error> {
+        sqlx::query_as::<DB, DbStatement>(&format!(
+            "select {} from {} where id = ?",
+            DbStatement::COLUMNS,
+            DbStatement::TABLE
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
     }
 }
 

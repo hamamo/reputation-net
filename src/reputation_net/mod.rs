@@ -21,9 +21,11 @@ use libp2p::{
     NetworkBehaviour, PeerId,
 };
 
+use crate::storage::Persistent;
+
 use super::{
     model::{Date, Entity, SignedStatement, Statement, UnsignedOpinion},
-    storage::{PersistResult, Repository, Storage},
+    storage::{Persist, Storage},
 };
 
 mod messages;
@@ -114,17 +116,8 @@ impl ReputationNet {
             autonat: autonat::Behaviour::new(
                 local_peer_id,
                 autonat::Config {
-                    timeout: Duration::from_secs(30),
-                    boot_delay: Duration::from_secs(5),
-                    refresh_interval: Duration::from_secs(600),
-                    retry_interval: Duration::from_secs(10),
-                    throttle_server_period: Duration::from_secs(120),
-                    use_connected: true,
-                    confidence_max: 5,
-                    max_peer_addresses: 10,
-                    throttle_clients_global_max: 5,
-                    throttle_clients_peer_max: 2,
-                    throttle_clients_period: Duration::from_secs(120),
+                    use_only_global_ips: true,
+                    ..autonat::Config::default()
                 },
             ),
             identify: Identify::new(IdentifyConfig::new(
@@ -188,7 +181,7 @@ impl ReputationNet {
 
     pub async fn sign_statement(
         &mut self,
-        statement: PersistResult<Statement>,
+        statement: Persistent<Statement>,
     ) -> Option<SignedStatement> {
         let opinion = UnsignedOpinion {
             date: Date::today(),
@@ -203,7 +196,9 @@ impl ReputationNet {
         let signed_opinion = storage
             .persist_opinion(signed_opinion, &statement.id)
             .await
-            .unwrap();
+            .unwrap()
+            .data;
+        let _ = storage.update_last_used(vec![statement.id]).await;
         Some(SignedStatement {
             statement: statement.data,
             opinions: vec![signed_opinion.data],
@@ -273,23 +268,14 @@ impl ReputationNet {
                 let mut storage = self.storage.write().await;
                 match storage.persist(statement).await {
                     Ok(persist_result) => {
-                        info!(
-                            "{} statement {} has id {}",
-                            persist_result.wording(),
-                            persist_result.data,
-                            persist_result.id
-                        );
+                        info!("{}", persist_result);
+                        let persistent_statement = &persist_result.data;
                         for signed_opinion in signed_statement.opinions {
                             let result = storage
-                                .persist_opinion(signed_opinion, &persist_result.id)
+                                .persist_opinion(signed_opinion, &persistent_statement.id)
                                 .await
                                 .expect("could insert opinion");
-                            info!(
-                                "{} opinion {} has id {}",
-                                result.wording(),
-                                result.data,
-                                result.id
-                            );
+                            info!("{}", result);
                         }
                         if persist_result.is_new() && persist_result.name == "template" {
                             if let Entity::Template(template) = &persist_result.entities[0] {
@@ -372,14 +358,14 @@ impl ReputationNet {
                 for signed_statement in list {
                     println!("got statement in response: {}", signed_statement.statement);
                     let mut storage = self.storage.write().await;
-                    let statement_id = storage
+                    let persistent_statement = storage
                         .persist(signed_statement.statement)
                         .await
                         .expect("could persist statement")
-                        .id;
+                        .data;
                     for opinion in signed_statement.opinions {
                         storage
-                            .persist_opinion(opinion, &statement_id)
+                            .persist_opinion(opinion, &persistent_statement.id)
                             .await
                             .expect("could persist opinion");
                     }
@@ -393,11 +379,13 @@ impl ReputationNet {
     pub fn handle_behaviour_event(&mut self, event: OutEvent) {
         info!("got behaviour event: {:?}", event);
         match event {
-            OutEvent::Identify(event) => {
+            OutEvent::Identify(_event) => {
                 // println!("identify: {:?}", event)
             }
             OutEvent::Autonat(event) => {
-                println!("autonat: {:?}", event)
+                if let autonat::Event::StatusChanged { old, new } = event {
+                    println!("autonat: status {:?} -> {:?}", old, new);
+                }
             }
             OutEvent::Ping(event) => {
                 info!("ping event: {:?}", event);

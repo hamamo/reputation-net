@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use rocket::{get, serde::json::Json, Config, State};
 use std::{str::FromStr, sync::Arc};
 use tokio::sync::RwLock;
@@ -21,7 +22,7 @@ async fn lookup(entity: String, state: &State<ManagedStorage>) -> Json<Vec<State
         .expect("could read statements")
         .into_iter()
         .map(|ps| ps.data)
-        .collect::<Vec<_>>();
+        .collect_vec();
     Json(statements)
 }
 

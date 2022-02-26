@@ -1,6 +1,7 @@
 use std::{error::Error, str::FromStr, time::Instant};
 
 use futures::{channel::mpsc::Sender, SinkExt};
+use itertools::Itertools;
 use tokio::io::{stdin, AsyncBufReadExt, BufReader};
 
 use log::{error, info};
@@ -37,13 +38,8 @@ impl ReputationNet {
                     .await;
                 match result {
                     Ok(actual_statement) => {
-                        println!(
-                            "{} statement {} has id {}",
-                            actual_statement.wording(),
-                            actual_statement.data,
-                            actual_statement.id
-                        );
-                        let signed_statement = self.sign_statement(actual_statement).await.unwrap();
+                        println!("{}", actual_statement);
+                        let signed_statement = self.sign_statement(actual_statement.data).await.unwrap();
                         self.publish_statement(signed_statement);
                     }
                     Err(_e) => {
@@ -67,7 +63,7 @@ impl ReputationNet {
     }
 
     async fn local_command(&mut self, command: &str) {
-        let words = command.split_ascii_whitespace().collect::<Vec<_>>();
+        let words = command.split_ascii_whitespace().collect_vec();
         if words.len() == 0 {
             return;
         }

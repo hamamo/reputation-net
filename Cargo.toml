@@ -8,7 +8,7 @@ edition = "2021"
 
 [dependencies]
 # libp2p = { git = "https://github.com/libp2p/rust-libp2p.git" }
-libp2p = "0.42"
+libp2p = {path = "rust-libp2p"}
 futures = "*"
 cidr = "*"
 sha2 = "*"
@@ -19,7 +19,7 @@ tokio-stream = "*"
 async-trait = "*"
 once_cell = "*"
 libsqlite3-sys = "*"
-sqlx = { version = "*", features = ["runtime-tokio-rustls", "sqlite"] }
+sqlx = { version = "*", features = ["runtime-tokio-rustls", "sqlite", "chrono"] }
 percent-encoding = "*"
 nom = "7"
 nom-bufreader = "*"

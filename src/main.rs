@@ -1,23 +1,24 @@
 #![feature(proc_macro_hygiene, decl_macro)]
-#[macro_use] extern crate rocket;
+#[macro_use]
+extern crate rocket;
 
-use std::error::Error;
+use std::{error::Error, time::Duration};
 use tokio::spawn;
 
 use clap::Parser;
 use futures::{
     channel::mpsc::{channel, Receiver},
-    select, StreamExt,
+    StreamExt,
 };
 use log::{debug, info};
 
 use libp2p::{multiaddr::Protocol, swarm::SwarmEvent, Multiaddr, Swarm};
 
+mod api;
 mod milter;
 mod model;
 mod reputation_net;
 mod storage;
-mod api;
 
 use reputation_net::{input_reader, Message, ReputationNet};
 
@@ -74,8 +75,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         swarm.dial(remote)?;
     }
 
-    
-
     if let Some(port) = args.milter {
         println!("Running milter on port {}", port);
         let storage = swarm.behaviour().storage.clone();
@@ -103,7 +102,7 @@ async fn network_loop(
     mut message_receiver: Receiver<Message>,
 ) -> Result<(), std::io::Error> {
     loop {
-        select! {
+        tokio::select! {
             event = swarm.next() => {
                 info!("swarm event: {:?}", event);
                 match event {
@@ -136,6 +135,10 @@ async fn network_loop(
                     }
                     None => panic!("end of network?")
                 }
+            }
+            else => {
+                println!("nothing to do in main loop");
+                std::thread::sleep(Duration::from_millis(300));
             }
         }
     }

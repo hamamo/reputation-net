@@ -69,11 +69,11 @@ impl Storage {
 
         // insert the root template, this is currently manual
         let template_statement = Statement::from_str("template(template(Template))").unwrap();
-        let template_statement = self.persist(template_statement).await?;
+        let template_statement = self.persist(template_statement).await?.data;
 
         // insert the "signer" template
         let signer_statement = Statement::from_str("template(signer(Signer))").unwrap();
-        let signer_statement = self.persist(signer_statement).await?;
+        let signer_statement = self.persist(signer_statement).await?.data;
 
         // make sure an owner trust entry exists
         self.ensure_own_key().await?;
@@ -197,6 +197,8 @@ impl Storage {
             }
         };
         let mut statements = vec![];
+        self.update_last_used(rows.iter().map(|db_row| db_row.id).collect_vec())
+            .await?;
         for db_row in rows {
             statements.push(self.convert(db_row).await?)
         }
@@ -365,7 +367,7 @@ impl Storage {
     ) -> Result<PersistResult<Opinion>, Error> {
         // this actually persists a signed opinion. Raw opinions without signature are only used for temporary purposes.
         let signer = Statement::signer(Entity::Signer(opinion.signer.clone()));
-        let signer_result = self.persist(signer).await.unwrap();
+        let signer_result = self.persist(signer).await.unwrap().data;
         let opinion_data = &opinion.data;
 
         let prev_opinion_result = sqlx::query_as::<DB, (Id<Opinion>, Date, u8)>(
@@ -422,7 +424,8 @@ impl Storage {
             comment: "".into(),
         };
         let signed_opinion = opinion.sign_using(&statement.signable_bytes(), &own_key.key);
-        let statement_id = self.persist(statement).await?.id;
+        let statement_id = self.persist(statement).await?.data.id;
+        self.update_last_used(vec![statement_id]).await?;
         self.persist_opinion(signed_opinion, &statement_id).await
     }
 
@@ -447,7 +450,7 @@ impl Storage {
                     None
                 }
             })
-            .collect::<Vec<_>>();
+            .collect_vec();
         for e in asns {
             let mut list = self.find_statements_referencing(&e).await?;
             statements.append(&mut list);
@@ -482,15 +485,15 @@ impl Storage {
             _ => {
                 let own_key = OwnKey::new();
                 let statement = Statement::signer(own_key.signer.clone());
-                let persist_result = self.persist(statement).await?;
+                let persistent_statement = self.persist(statement).await?.data;
                 let privkey = own_key.privkey_string();
-                info!("trust {} {}", persist_result.id, privkey);
+                info!("trust {} {}", persistent_statement.id, privkey);
                 let mut tx = self.pool.begin().await.unwrap();
                 sqlx::query(&format!(
                     "insert into {} (signer_id, key) values(?,?)",
                     DbPrivateKey::TABLE
                 ))
-                .bind(persist_result.id)
+                .bind(persistent_statement.id)
                 .bind(privkey)
                 .execute(&mut tx)
                 .await?;
@@ -506,8 +509,7 @@ impl Storage {
     }
 
     /// Refresh opinions that would expire soon but should still be valid.
-    /// Currently only refreshes templates.
-    /// Returns a list of statements to be published to the network.
+    /// Returns a list of signed statements to be published to the network.
     #[allow(dead_code)]
     pub async fn refresh_opinions(&self) -> Result<Vec<SignedStatement>, Error> {
         Ok(vec![])
@@ -581,6 +583,33 @@ impl Storage {
         }
         Ok(result)
     }
+
+    // Update the last_used column. This does not yet compute the weight.
+    pub async fn update_last_used(&self, ids: Vec<Id<Statement>>) -> Result<(), sqlx::Error> {
+        for id in ids {
+            if let Some(row) = self.get_raw(id).await? {
+                let last_used = chrono::Utc::now();
+                let last_weight = if let Some(weight) = row.last_weight {
+                    let age_in_weeks = if let Some(used) = row.last_used {
+                        (last_used - used).num_seconds() as f32 / 86400.0
+                    } else {
+                        1.0
+                    };
+                    1.0 + weight * f32::powf(0.5, age_in_weeks)
+                } else {
+                    1.0
+                };
+                sqlx::query("update statement set last_used=?, last_weight=? where id=?")
+                    .persistent(true)
+                    .bind(last_used)
+                    .bind(last_weight)
+                    .bind(id)
+                    .execute(&self.pool)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -595,11 +624,10 @@ mod tests {
         let rt = Runtime::new().unwrap();
 
         let mut storage = rt.block_on(Storage::new());
-        rt
-            .block_on(storage.initialize_database())
+        rt.block_on(storage.initialize_database())
             .expect("could initialize database");
         let statement = Statement::from_str("template(template(Template))").unwrap();
-        let persist_result = rt.block_on(storage.persist(statement)).unwrap();
+        let persist_result = rt.block_on(storage.persist(statement)).unwrap().data;
         assert!(persist_result.id >= Id::new(1));
     }
 

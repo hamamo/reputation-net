@@ -2,6 +2,8 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
+use itertools::Itertools;
+
 use super::parser;
 
 use super::entity::{Entity, EntityType};
@@ -29,11 +31,11 @@ impl Display for Template {
                 .map(|x| {
                     (&x).iter()
                         .map(EntityType::to_string)
-                        .collect::<Vec<String>>()
+                        .collect_vec()
                         .join("|")
                         .to_string()
                 })
-                .collect::<Vec<String>>()
+                .collect_vec()
                 .join(",")
         )
     }
@@ -49,7 +51,7 @@ impl Display for SpecificTemplate {
                 .entity_types
                 .iter()
                 .map(EntityType::to_string)
-                .collect::<Vec<String>>()
+                .collect_vec()
                 .join(",")
         )
     }
