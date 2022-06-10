@@ -4,22 +4,33 @@ version = "0.1.0"
 authors = ["Hans-Martin Mosner <hmm@heeg.de>"]
 edition = "2021"
 
+[features]
+autonat = []
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-# libp2p = { git = "https://github.com/libp2p/rust-libp2p.git" }
-libp2p = {path = "rust-libp2p"}
+libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", features = [
+    "dns-tokio",
+    "tcp-tokio",
+] }
+# libp2p = {path = "rust-libp2p"}
 futures = "*"
 cidr = "*"
 sha2 = "*"
 chrono = { version = "*", features = ["clock"] }
 base64 = "*"
-tokio = { version = "1", features = ["macros", "io-std"] }
+tokio = { version = "1", features = ["full", "tracing"] }
 tokio-stream = "*"
+console-subscriber = "*"
 async-trait = "*"
 once_cell = "*"
 libsqlite3-sys = "*"
-sqlx = { version = "*", features = ["runtime-tokio-rustls", "sqlite", "chrono"] }
+sqlx = { version = "*", features = [
+    "runtime-tokio-rustls",
+    "sqlite",
+    "chrono",
+] }
 percent-encoding = "*"
 nom = "7"
 nom-bufreader = "*"
@@ -27,6 +38,7 @@ env_logger = "*"
 log = "*"
 serde = "*"
 serde_json = "*"
+serde_derive = "*"
 itertools = "*"
 bitflags = "*"
 hex = "*"
@@ -36,5 +48,11 @@ unicase = "*"
 lazy_static = "*"
 clap = { version = "3", features = ["derive"] }
 regex = "1"
-rocket = { version = "0.5.0-rc.1", features = ["json"] }
 anyhow = "1"
+url = "2"
+trust-dns-resolver = { version = "0.21", features = [
+    "system-config",
+    "tokio-runtime",
+] }
+axum = "*"
+async-recursion = "*"

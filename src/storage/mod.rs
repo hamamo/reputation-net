@@ -545,22 +545,6 @@ impl Storage {
         self.cleanup_statements().await
     }
 
-    /// utility method to fix the cidr database columns, to be used if there are old IP entries
-    pub async fn fix_cidr(&self) -> Result<(), Error> {
-        for s in self.get_all().await? {
-            let (cidr_min, cidr_max) = s.entities[0].cidr_minmax();
-            if let Some(cidr_min) = cidr_min {
-                sqlx::query("update statement set cidr_min=?, cidr_max=? where id=?")
-                    .bind(cidr_min)
-                    .bind(cidr_max)
-                    .bind(s.id)
-                    .execute(&self.pool)
-                    .await?;
-            }
-        }
-        Ok(())
-    }
-
     pub async fn get_sync_infos(&self, date: Date) -> Result<SyncInfos, Error> {
         let rows = sqlx::query_as::<DB, (String, String)>(
             "select s.name, o.signature

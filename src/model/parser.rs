@@ -47,9 +47,11 @@ fn entity_type(i: &str) -> nom::IResult<&str, EntityType> {
         Err(e) => Err(e),
     }
 }
+
 fn entity_type_alternatives(i: &str) -> nom::IResult<&str, Vec<EntityType>> {
     nom::multi::separated_list1(nom::character::complete::char('|'), entity_type)(i)
 }
+
 fn entity_types(i: &str) -> nom::IResult<&str, Vec<Vec<EntityType>>> {
     nom::multi::separated_list1(
         nom::character::complete::char(','),
@@ -149,6 +151,22 @@ fn ipv6(i: &str) -> IResult<&str, Entity> {
     )(i)
 }
 
+// an URL (only web URLs are handled, excluding query parameters)
+// This should be fixed to use Url::parse() from rust-url
+fn url(i: &str) -> IResult<&str, Entity> {
+    map(
+        recognize(tuple((
+            alt((tag("https"), tag("http"))),
+            tag("://"),
+            domain,
+            opt(tuple((tag(":"), digit1))),
+            many0(tuple((tag("/"), alt((alphanumeric1, is_a("-_.%+")))))),
+        ))),
+        |url| Entity::Url(url.into()),
+    )(i)
+}
+
+// a template
 pub fn template(i: &str) -> IResult<&str, Entity> {
     map(
         tuple((name, tag("("), entity_types, tag(")"))),
@@ -168,7 +186,7 @@ pub fn signer(i: &str) -> IResult<&str, Entity> {
 }
 
 pub fn entity(i: &str) -> IResult<&str, Entity> {
-    alt((email, hash_value, template, asn, signer, domain, ipv4, ipv6))(i)
+    alt((email, hash_value, template, asn, signer, domain, url, ipv4, ipv6))(i)
 }
 
 pub fn statement(i: &str) -> IResult<&str, Statement> {
@@ -190,6 +208,16 @@ pub fn statement(i: &str) -> IResult<&str, Statement> {
         ),
     ))(i)
 }
+
+/* 
+pub fn opinion_parameters(i: &str) -> IResult<&str, OpinionParameters> {
+    map(
+        separated_list1(alt((
+            
+        )))
+    )
+}
+*/
 
 #[cfg(test)]
 mod tests {
@@ -236,6 +264,13 @@ mod tests {
         assert_eq!(
             super::entity("biz").unwrap(),
             ("", Entity::Domain("biz".into())),
+        )
+    }
+    #[test]
+    fn url() {
+        assert_eq!(
+            super::url("https://bit.ly/3fA9rE8").unwrap(),
+            ("", Entity::Url("https://bit.ly/3fA9rE8".into())),
         )
     }
     #[test]

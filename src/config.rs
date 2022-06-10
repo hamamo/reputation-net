@@ -1,7 +1,7 @@
 /// Configuration data
 struct MilterConfig {
     port: u16,
-    rejection_message: String,
+    info_message: String,
 }
 
 struct ApiConfig {

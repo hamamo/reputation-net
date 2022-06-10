@@ -44,6 +44,7 @@ impl Persist<Statement> for Storage {
                         &cidr_max,
                     )
                     .await;
+                println!("inserted {}", statement);
                 match insert_result {
                     Ok(id) => PersistResult::new(id, statement),
                     Err(_) => {

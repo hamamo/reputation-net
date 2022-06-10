@@ -12,16 +12,18 @@ use crate::{
     storage::Storage,
 };
 
-use super::packet::*;
+use super::{config::Config, packet::*, FieldValue};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
 enum Location {
-    Connect,
+    ConnectAddress,
+    ConnectName,
     Helo,
     MailFrom,
     RcptTo,
     Header(String),
+    Body,
 }
 
 #[derive(Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
@@ -36,14 +38,17 @@ pub enum Severity {
 
 struct Match {
     location: Location,
+    #[allow(dead_code)]
+    path: String,
     entity: Entity,
     statement: Statement,
 }
 
 pub struct PolicyAccumulator {
     storage: Arc<RwLock<Storage>>,
-    statements: Vec<Match>,
+    pub config: Arc<Config>,
     macros: HashMap<String, String>,
+    matches: Vec<Match>,
     severity: Severity,
 }
 
@@ -61,17 +66,18 @@ impl Statement {
 }
 
 impl PolicyAccumulator {
-    pub fn new(storage: Arc<RwLock<Storage>>) -> Self {
+    pub fn new(storage: Arc<RwLock<Storage>>, config: Arc<Config>) -> Self {
         Self {
-            storage: storage,
-            statements: vec![],
+            storage,
+            config,
+            matches: vec![],
             macros: HashMap::new(),
             severity: Severity::None,
         }
     }
 
     pub fn reset(&mut self) {
-        self.statements = vec![];
+        self.matches = vec![];
         self.macros = HashMap::new();
         self.severity = Severity::None;
     }
@@ -82,7 +88,7 @@ impl PolicyAccumulator {
 
     pub fn reason(&self) -> String {
         match self
-            .statements
+            .matches
             .iter()
             .find(|m| m.statement.severity() == self.severity)
         {
@@ -102,7 +108,28 @@ impl PolicyAccumulator {
         }
     }
 
-    async fn lookup(&mut self, location: &Location, what: &str) {
+    async fn lookup(&mut self, location: &Location, value: FieldValue) {
+        println!("looking up {} in {}", value, location);
+        let prefix = location.prefix();
+        for (rulename, rule) in &self.config.rules {
+            for path in rule.paths_matching_prefix(&prefix) {
+                let values = value.lookup_path(path).await;
+                println!(
+                    "Found values {:?} in rule {} path {}",
+                    values, rulename, path
+                );
+                for v in values {
+                    let storage = &*self.storage.read().await;
+                    if rule.matches_value(&v, &self.config, storage).await {
+                        println!("Rule {} matched {} in {}", rulename, value, location);
+                    }
+                }
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    async fn old_lookup(&mut self, location: &Location, what: &str) {
         if let Ok(entity) = Entity::from_str(what) {
             let statements = self.statements_about(&entity).await;
             if statements.len() == 0 {
@@ -113,12 +140,19 @@ impl PolicyAccumulator {
                     Some(s) => s.clone(),
                     None => "NOQUEUE".to_string(),
                 };
-                println!("{}: {} in {} ({})", qid, entity, location, statement);
+                match statement.name.as_str() {
+                    "known" | "asn" => (),
+                    _ => println!("{}: {} in {} ({})", qid, entity, location, statement),
+                }
                 // ignore dynamic IPs anywhere else than in CONNECT
-                if location == &Location::Connect || statement.name != "dynamic" {
+                if location == &Location::ConnectName
+                    || location == &Location::ConnectAddress
+                    || statement.name != "dynamic"
+                {
                     self.severity = self.severity.max(statement.severity());
-                    self.statements.push(Match {
+                    self.matches.push(Match {
                         location: location.clone(),
+                        path: "".into(),
                         entity: entity.clone(),
                         statement,
                     });
@@ -146,33 +180,39 @@ impl PolicyAccumulator {
     }
 
     pub async fn connect(&mut self, data: &SmficConnect) -> () {
-        self.lookup(&Location::Connect, &data.hostname.to_string())
-            .await;
-        self.lookup(&Location::Connect, &data.address.to_string())
-            .await;
+        self.lookup(
+            &Location::ConnectName,
+            FieldValue::Domain(data.hostname.to_string()),
+        )
+        .await;
+        self.lookup(
+            &Location::ConnectAddress,
+            FieldValue::Ipv4(data.address.to_string()),
+        )
+        .await;
     }
 
     pub async fn helo(&mut self, data: &SmficHelo) -> () {
         let helo = &data.helo.to_string();
-        self.lookup(&Location::Helo, strip_brackets(helo)).await;
+        self.lookup(
+            &Location::Helo,
+            FieldValue::Domain(strip_brackets(helo).into()),
+        )
+        .await;
     }
 
     pub async fn mail_from(&mut self, data: &SmficMail) -> () {
         let value = data.args[0].to_string();
         let from = strip_brackets(&value);
-        self.lookup(&Location::MailFrom, &from).await;
+        self.lookup(&Location::MailFrom, FieldValue::Mail(from.into()))
+            .await;
         if let Some(srs_from) = srs_unpack(&from) {
-            self.lookup(&Location::MailFrom, &srs_from).await;
+            self.lookup(&Location::MailFrom, FieldValue::Mail(srs_from))
+                .await;
         }
     }
 
     pub async fn header(&mut self, data: &SmficHeader) -> () {
-        lazy_static! {
-            static ref IP_OR_DOMAIN_REGEX: Regex = Regex::new(
-                r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|([A-Za-z0-9-]{1, 63}\.)+[A-Za-z]{2,8}"
-            )
-            .unwrap();
-        }
         let mut line = data.name.bytes.clone();
         line.extend(&b": ".to_vec());
         line.extend(&data.value.bytes);
@@ -189,9 +229,17 @@ impl PolicyAccumulator {
                 | "x-ms-exchange-crosstenant-originalattributedtenantconnectingip" => {
                     let header_value = header.get_value();
                     let value = header_value.as_str();
-                    for m in IP_OR_DOMAIN_REGEX.find_iter(value) {
+                    let regex = Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").unwrap();
+                    for m in regex.find_iter(value) {
                         // println!("{}: {}", key, m.as_str());
-                        self.lookup(&location, m.as_str()).await;
+                        self.lookup(&location, FieldValue::Ipv4(m.as_str().into()))
+                            .await;
+                    }
+                    let regex = Regex::new(r"([A-Za-z0-9-]{1, 63}\.)+[A-Za-z]{2,8}").unwrap();
+                    for m in regex.find_iter(value) {
+                        // println!("{}: {}", key, m.as_str());
+                        self.lookup(&location, FieldValue::Domain(m.as_str().into()))
+                            .await;
                     }
                 }
                 "from" | "reply-to" | "sender" => {
@@ -199,11 +247,16 @@ impl PolicyAccumulator {
                         for addr in addrlist.iter() {
                             match addr {
                                 MailAddr::Single(info) => {
-                                    self.lookup(&location, &info.addr).await;
+                                    self.lookup(&location, FieldValue::Mail(info.addr.to_owned()))
+                                        .await;
                                 }
                                 MailAddr::Group(info) => {
                                     for single in &info.addrs {
-                                        self.lookup(&location, &single.addr).await;
+                                        self.lookup(
+                                            &location,
+                                            FieldValue::Mail(single.addr.to_owned()),
+                                        )
+                                        .await;
                                     }
                                 }
                             }
@@ -254,14 +307,29 @@ fn srs_unpack(address: &str) -> Option<String> {
     }
 }
 
+impl Location {
+    fn prefix(&self) -> String {
+        match self {
+            Location::ConnectName => "connect.client-name".to_owned(),
+            Location::ConnectAddress => "connect.client-addr".to_owned(),
+            Location::Helo => "envelope.helo".to_owned(),
+            Location::MailFrom => "envelope.mail-from".to_owned(),
+            Location::RcptTo => "envelope.rcpt-to".to_owned(),
+            Location::Header(key) => format!("header.{}", key.to_ascii_lowercase()),
+            Location::Body => "body".to_owned(),
+        }
+    }
+}
+
 impl Display for Location {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Location::Connect => write!(f, "CONNECT"),
+            Location::ConnectName | Location::ConnectAddress => write!(f, "CONNECT"),
             Location::Helo => write!(f, "HELO"),
             Location::MailFrom => write!(f, "MAIL FROM"),
             Location::RcptTo => write!(f, "RCPT TO"),
             Location::Header(key) => write!(f, "{:?} header", key),
+            Location::Body => write!(f, "BODY"),
         }
     }
 }

@@ -1,18 +1,22 @@
-#![feature(proc_macro_hygiene, decl_macro)]
-#[macro_use]
-extern crate rocket;
-
 use std::{error::Error, time::Duration};
-use tokio::spawn;
 
 use clap::Parser;
+use console_subscriber;
 use futures::{
     channel::mpsc::{channel, Receiver},
     StreamExt,
 };
 use log::{debug, info};
 
-use libp2p::{multiaddr::Protocol, swarm::SwarmEvent, Multiaddr, Swarm};
+use libp2p::{
+    core::upgrade,
+    mplex,
+    multiaddr::Protocol,
+    noise::{Keypair, NoiseConfig, X25519Spec},
+    swarm::{SwarmBuilder, SwarmEvent},
+    tcp::TokioTcpConfig,
+    Multiaddr, Swarm, Transport,
+};
 
 mod api;
 mod milter;
@@ -37,6 +41,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    #[cfg(debug_assertions)]
+    console_subscriber::init();
+    
     env_logger::init();
     let args = Args::parse();
 
@@ -45,12 +52,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut swarm = {
         let behaviour = ReputationNet::new(message_sender).await;
-        let transport = libp2p::development_transport(behaviour.local_key.clone()).await?;
+        let auth_keys = Keypair::<X25519Spec>::new()
+            .into_authentic(&behaviour.local_key)
+            .expect("can create auth keys");
+        let transport = TokioTcpConfig::new()
+            .upgrade(upgrade::Version::V1)
+            .authenticate(NoiseConfig::xx(auth_keys).into_authenticated())
+            .multiplex(mplex::MplexConfig::new())
+            .boxed();
         let local_peer_id = behaviour.local_peer_id();
 
         println!("Local peer id: {:?}", local_peer_id);
 
-        Swarm::new(transport, behaviour, local_peer_id)
+        SwarmBuilder::new(transport, behaviour, local_peer_id)
+            .executor(Box::new(|fut| {
+                tokio::task::Builder::new()
+                    .name("libp2p swarm")
+                    .spawn(fut);
+            }))
+            .build()
     };
 
     // Tell the swarm to listen on all interfaces and the first available port
@@ -78,17 +98,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if let Some(port) = args.milter {
         println!("Running milter on port {}", port);
         let storage = swarm.behaviour().storage.clone();
-        spawn(milter::run_milter(("0.0.0.0", port), storage));
+        tokio::task::Builder::new()
+            .name("milter")
+            .spawn(milter::run_milter(("0.0.0.0", port), storage));
     }
 
     if let Some(port) = args.api {
         println!("Running REST api on port {}", port);
         let storage = swarm.behaviour().storage.clone();
-        spawn(api::api(port, storage));
+        tokio::task::Builder::new()
+            .name("web api")
+            .spawn(api::api(port, storage));
     }
 
     if args.interactive {
-        spawn(input_reader(input_sender));
+        tokio::task::Builder::new()
+            .name("command input")
+            .spawn(input_reader(input_sender));
     }
 
     network_loop(swarm, input_receiver, message_receiver).await?;
@@ -109,11 +135,15 @@ async fn network_loop(
                     Some(SwarmEvent::Behaviour(s)) => {
                         swarm.behaviour_mut().handle_behaviour_event(s);
                     }
-                    Some(SwarmEvent::ConnectionEstablished{peer_id, endpoint: _, num_established, concurrent_dial_errors: _}) => {
-                        swarm.behaviour_mut().handle_connection_established(peer_id, u32::from(num_established));
+                    Some(SwarmEvent::ConnectionEstablished{peer_id, endpoint, num_established, concurrent_dial_errors}) => {
+                        println!("connection established: {}, {:?}, {}, {:?}", peer_id, endpoint, num_established, concurrent_dial_errors);
+                        let num_total = swarm.network_info().num_peers();
+                        swarm.behaviour_mut().handle_connection_established(peer_id, u32::from(num_established) as usize, num_total);
                     }
-                    Some(SwarmEvent::ConnectionClosed{peer_id, endpoint: _, num_established, cause: _}) => {
-                        swarm.behaviour_mut().handle_connection_closed(peer_id, num_established);
+                    Some(SwarmEvent::ConnectionClosed{peer_id, endpoint, num_established, cause}) => {
+                        println!("connection closed: {}, {:?}, {}, {:?}", peer_id, endpoint, num_established, cause);
+                        let num_total = swarm.network_info().num_peers();
+                        swarm.behaviour_mut().handle_connection_closed(peer_id, num_established as usize, num_total);
                     }
                     _ => ()
                 }

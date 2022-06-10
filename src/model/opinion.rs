@@ -6,15 +6,22 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::{percent_decode, percent_encode, Keypair, PublicKey, Signature, Statement, Date};
+use super::{percent_decode, percent_encode, Date, Keypair, PublicKey, Signature, Statement};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnsignedOpinion {
-    pub date: Date,       // day since the UNIX epoch
+    pub date: Date,      // day since the UNIX epoch
     pub valid: u16,      // number of days this opinion is considered valid
     pub serial: u8, // to detect most recent opinion about a statement if more than one are made on one day
     pub certainty: i8, // positive or negative certainty in range -3..3.
     pub comment: String, // optional comment, may be empty
+}
+
+#[allow(dead_code)]
+pub struct OpinionParameters {
+    valid: Option<u16>,
+    certainty: Option<i8>,
+    comment: Option<String>,
 }
 
 #[derive(Clone, Debug)]

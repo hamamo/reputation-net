@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use libp2p::multihash::{Sha2_256, StatefulHasher};
+use libp2p::multihash::{Sha2_256, Hasher};
 use serde::{Deserialize, Serialize};
 
 use crate::model::Date;

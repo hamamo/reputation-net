@@ -118,15 +118,15 @@ where
             last_weight: row.get(7),
         };
         let opinion = DbOpinion {
-            id: row.get(6),
-            statement_id: row.get(7),
-            signer_id: row.get(8),
-            date: row.get(9),
-            valid: row.get(10),
-            serial: row.get(11),
-            certainty: row.get(12),
-            comment: row.get(13),
-            signature: row.get(14),
+            id: row.get(8),
+            statement_id: row.get(9),
+            signer_id: row.get(10),
+            date: row.get(11),
+            valid: row.get(12),
+            serial: row.get(13),
+            certainty: row.get(14),
+            comment: row.get(15),
+            signature: row.get(16),
         };
         Ok(Self { statement, opinion })
     }

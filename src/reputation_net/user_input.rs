@@ -68,11 +68,6 @@ impl ReputationNet {
             return;
         }
         match words[0] {
-            "fix-cidr" => {
-                if let Err(e) = self.storage.write().await.fix_cidr().await {
-                    error!("error: {:?}", e);
-                }
-            }
             "sync" => {
                 let date = if words.len() > 1 {
                     match Date::from_str(words[1]) {

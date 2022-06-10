@@ -5,8 +5,10 @@ use tokio::sync::RwLock;
 use futures::channel::mpsc::Sender;
 use log::{error, info};
 
+#[cfg(feature = "autonat")]
+use libp2p::autonat;
+
 use libp2p::{
-    autonat,
     gossipsub::{
         Gossipsub, GossipsubConfig, GossipsubEvent, IdentTopic, MessageAuthenticity, TopicHash,
     },
@@ -44,6 +46,7 @@ pub use user_input::input_reader;
 #[behaviour(out_event = "OutEvent")]
 pub struct ReputationNet {
     identify: Identify,
+    #[cfg(feature = "autonat")]
     autonat: autonat::Behaviour,
     mdns: Mdns,
     gossipsub: Gossipsub,
@@ -63,6 +66,7 @@ pub struct ReputationNet {
 #[derive(Debug)]
 pub enum OutEvent {
     Identify(IdentifyEvent),
+    #[cfg(feature = "autonat")]
     Autonat(autonat::Event),
     Mdns(MdnsEvent),
     Gossipsub(GossipsubEvent),
@@ -76,6 +80,7 @@ impl From<IdentifyEvent> for OutEvent {
     }
 }
 
+#[cfg(feature = "autonat")]
 impl From<autonat::Event> for OutEvent {
     fn from(v: autonat::Event) -> Self {
         Self::Autonat(v)
@@ -110,13 +115,15 @@ impl ReputationNet {
     pub async fn new(message_sender: Sender<Message>) -> Self {
         let storage = Storage::new().await;
         let keypair = storage.own_key().key.clone();
+        #[cfg(feature = "autonat")]
         let local_peer_id = PeerId::from_public_key(&keypair.public());
         let storage = Arc::new(RwLock::new(storage));
         let mut repnet = Self {
+            #[cfg(feature = "autonat")]
             autonat: autonat::Behaviour::new(
                 local_peer_id,
                 autonat::Config {
-                    use_only_global_ips: true,
+                    // use_only_global_ips: true,
                     ..autonat::Config::default()
                 },
             ),
@@ -132,7 +139,7 @@ impl ReputationNet {
             mdns: Mdns::new(MdnsConfig::default()).await.unwrap(),
             ping: Ping::new(
                 PingConfig::new()
-                    .with_interval(Duration::new(90, 0))
+                    .with_interval(Duration::new(300, 0))
                     .with_keep_alive(true),
             ),
             rpc: RequestResponse::new(
@@ -253,6 +260,14 @@ impl ReputationNet {
             Message::Response { peer_id, response } => {
                 self.handle_response_message(response, peer_id).await
             }
+            Message::SendAnnouncement { peer_id } => {
+                if let Some(infos) = self.sync_state.get_own_infos(Date::today()).await {
+                    self.post_message(&peer_id, RpcRequest::Announcement(infos));
+                }
+                if let Some(infos) = self.sync_state.get_own_infos(Date::yesterday()).await {
+                    self.post_message(&peer_id, RpcRequest::Announcement(infos));
+                }
+            }
         }
     }
 
@@ -307,7 +322,7 @@ impl ReputationNet {
     pub async fn handle_request_message(
         &mut self,
         request: RpcRequest,
-        _peer_id: PeerId,
+        peer_id: PeerId,
         response_channel: ResponseChannel<RpcResponse>,
     ) {
         // println!("got request message {:?} from {}", request, peer_id);
@@ -346,6 +361,19 @@ impl ReputationNet {
                 }
                 RpcResponse::Statements(statements)
             }
+            RpcRequest::Announcement(infos) => {
+                let requested_updates = self.sync_state.add_infos(&peer_id, &infos).await;
+                for t_name in requested_updates {
+                    self.post_message(
+                        &peer_id,
+                        RpcRequest::OpinionRequest {
+                            name: t_name,
+                            date: infos.date,
+                        },
+                    )
+                }
+                RpcResponse::None
+            }
         };
         // println!("sending response {:?}", response);
         self.rpc.send_response(response_channel, response).unwrap();
@@ -356,7 +384,7 @@ impl ReputationNet {
         match response {
             RpcResponse::Statements(list) => {
                 for signed_statement in list {
-                    println!("got statement in response: {}", signed_statement.statement);
+                    info!("got statement in response: {}", signed_statement.statement);
                     let mut storage = self.storage.write().await;
                     let persistent_statement = storage
                         .persist(signed_statement.statement)
@@ -379,9 +407,8 @@ impl ReputationNet {
     pub fn handle_behaviour_event(&mut self, event: OutEvent) {
         info!("got behaviour event: {:?}", event);
         match event {
-            OutEvent::Identify(_event) => {
-                // println!("identify: {:?}", event)
-            }
+            OutEvent::Identify(event) => self.handle_identify_event(event),
+            #[cfg(feature = "autonat")]
             OutEvent::Autonat(event) => {
                 if let autonat::Event::StatusChanged { old, new } = event {
                     println!("autonat: status {:?} -> {:?}", old, new);
@@ -393,6 +420,18 @@ impl ReputationNet {
             OutEvent::Mdns(event) => self.handle_mdns_event(event),
             OutEvent::Gossipsub(event) => self.handle_gossipsub_event(event),
             OutEvent::Rpc(event) => self.handle_rpc_event(event),
+        }
+    }
+
+    pub fn handle_identify_event(&mut self, event: IdentifyEvent) {
+        match event {
+            IdentifyEvent::Received { peer_id, info } => {
+                for address in info.listen_addrs {
+                    self.rpc.add_address(&peer_id, address)
+                }
+                self.gossipsub.add_explicit_peer(&peer_id);
+            }
+            _ => (),
         }
     }
 
@@ -411,7 +450,7 @@ impl ReputationNet {
             MdnsEvent::Expired(list) => {
                 for (peer, _addr) in list {
                     if !self.mdns.has_node(&peer) {
-                        self.gossipsub.remove_explicit_peer(&peer);
+                        // self.gossipsub.remove_explicit_peer(&peer);
                     }
                 }
             }
@@ -433,9 +472,8 @@ impl ReputationNet {
                         peer_id: peer,
                         topic: message.topic,
                     };
-                    match self.event_sender.try_send(message) {
-                        Err(e) => error!("could not send event: {:?}", e),
-                        _ => (),
+                    if let Err(e) = self.event_sender.try_send(message) {
+                        error!("could not send event: {:?}", e)
                     }
                 }
             }
@@ -462,26 +500,24 @@ impl ReputationNet {
                     channel,
                 } => {
                     let message = Message::Request {
-                        request: request,
+                        request,
                         peer_id: peer,
                         response_channel: channel,
                     };
-                    match self.event_sender.try_send(message) {
-                        Err(e) => error!("could not send event: {:?}", e),
-                        _ => (),
+                    if let Err(e) = self.event_sender.try_send(message) {
+                        error!("RPC could not send request: {:?}", e)
                     }
                 }
                 RequestResponseMessage::Response {
                     request_id: _,
                     response,
                 } => {
-                    let response = Message::Response {
-                        response: response,
+                    let message = Message::Response {
+                        response,
                         peer_id: peer,
                     };
-                    match self.event_sender.try_send(response) {
-                        Err(e) => error!("could not send event: {:?}", e),
-                        _ => (),
+                    if let Err(e) = self.event_sender.try_send(message) {
+                        error!("RPC could not send response: {:?}", e)
                     }
                 }
             },
@@ -490,14 +526,14 @@ impl ReputationNet {
                 request_id,
                 error,
             } => {
-                println!("outbound failure: {} {} ({})", peer, request_id, error)
+                println!("RPC outbound failure: {} {} ({})", peer, request_id, error)
             }
             RequestResponseEvent::InboundFailure {
                 peer,
                 request_id,
                 error,
             } => {
-                println!("inbound failure: {} {} ({})", peer, request_id, error)
+                println!("RPC inbound failure: {} {} ({})", peer, request_id, error)
             }
             RequestResponseEvent::ResponseSent {
                 peer: _,
@@ -508,18 +544,38 @@ impl ReputationNet {
         }
     }
 
-    pub fn handle_connection_established(&mut self, peer_id: PeerId, num_established: u32) {
+    pub fn handle_connection_established(
+        &mut self,
+        peer_id: PeerId,
+        num_connections_with_peer: usize,
+        num_peers: usize,
+    ) {
         println!(
-            "got connection with peer {:?} ({} connections)",
-            peer_id, num_established
+            "got connection with {:?} ({} connections, {} peers)",
+            peer_id, num_connections_with_peer, num_peers
         );
-        self.post_message(&peer_id, RpcRequest::TemplateRequest)
+        self.post_message(&peer_id, RpcRequest::TemplateRequest);
+        if num_connections_with_peer == 1 {
+            // first connection to that peer
+            let message = Message::SendAnnouncement { peer_id };
+            if let Err(e) = self.event_sender.try_send(message) {
+                error!("could not send event: {:?}", e)
+            };
+        }
     }
 
-    pub fn handle_connection_closed(&mut self, peer_id: PeerId, num_established: u32) {
+    pub fn handle_connection_closed(
+        &mut self,
+        peer_id: PeerId,
+        num_connections_with_peer: usize,
+        num_peers: usize,
+    ) {
         println!(
-            "connection with peer {:?} was closed ({} connections)",
-            peer_id, num_established
+            "connection with {:?} was closed ({} connections, {} peers)",
+            peer_id, num_connections_with_peer, num_peers
         );
+        if num_connections_with_peer == 0 {
+            // try to reconnect
+        }
     }
 }

@@ -16,11 +16,15 @@ use log::{debug, error, info};
 
 use crate::storage::Storage;
 
+mod config;
 mod packet;
 mod policy;
+mod field;
 
+use config::Config;
 use packet::*;
 use policy::*;
+pub use field::FieldValue;
 
 pub struct Milter<'a> {
     input: BufReader<ReadHalf<'a>>,
@@ -33,22 +37,28 @@ pub async fn run_milter(
     storage: Arc<RwLock<Storage>>,
 ) -> Result<(), Error> {
     info!("starting milter listener on {:?}", addr);
+    let config = Arc::new(Config::from_file("milter.toml").unwrap_or_else(|_| Config::default()));
+    println!("{:?}", config.as_ref());
     let listener = TcpListener::bind(addr).await?;
     info!("got listener: {:?}", listener);
     while let Ok((stream, peer_addr)) = listener.accept().await {
         info!("accepted connection from {:?}", peer_addr);
-        spawn(Milter::run_on(stream, storage.clone()));
+        spawn(Milter::run_on(stream, storage.clone(), config.clone()));
     }
     Ok(())
 }
 
 impl<'a> Milter<'a> {
-    async fn run_on(mut stream: TcpStream, storage: Arc<RwLock<Storage>>) -> Result<(), Error> {
+    async fn run_on(
+        mut stream: TcpStream,
+        storage: Arc<RwLock<Storage>>,
+        config: Arc<Config>,
+    ) -> Result<(), Error> {
         let (inner_reader, inner_writer) = stream.split();
         let mut milter = Milter {
             input: BufReader::new(inner_reader),
             output: BufWriter::new(inner_writer),
-            policy: PolicyAccumulator::new(storage),
+            policy: PolicyAccumulator::new(storage, config),
         };
         let result = milter.run().await;
         info!("milter run result: {:?}", result);
@@ -91,18 +101,27 @@ impl<'a> Milter<'a> {
             Severity::Known => Response::Accept,
             Severity::Reject => Response::Replycode(SmficReplycode {
                 smtpcode: 554,
-                reason: CString::from(self.policy.reason()),
+                reason: CString::from(self.reason()),
             }),
             Severity::None => Response::Continue,
             Severity::Quarantine => Response::Quarantine(SmficQuarantine {
-                reason: CString::from(self.policy.reason()),
+                reason: CString::from(self.reason()),
             }),
             Severity::Tempfail => Response::Replycode(SmficReplycode {
                 smtpcode: 457,
-                reason: CString::from(self.policy.reason()),
+                reason: CString::from(self.reason()),
             }),
         };
         self.write_response(&response).await
+    }
+
+    fn reason(&self) -> String {
+        let policy_reason = self.policy.reason();
+        if let Some(contact) = &self.policy.config.contact {
+            format!("{} - {}", policy_reason, contact)
+        } else {
+            policy_reason
+        }
     }
 
     fn reset(&mut self) {

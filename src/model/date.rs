@@ -20,6 +20,12 @@ impl Date {
             d: (Utc::now().timestamp() / 86400) as u32,
         }
     }
+
+    pub fn yesterday() -> Self {
+        Self {
+            d: (Utc::now().timestamp() / 86400 - 1) as u32,
+        }
+    }
 }
 
 impl From<u32> for Date {

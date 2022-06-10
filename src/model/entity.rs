@@ -29,13 +29,13 @@ pub struct InvalidEntity;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Entity {
-    Domain(String),    // denotes a domain name
-    EMail(String),     // denotes an e-mail address (localpart@domain)
-    AS(u32),           // denotes an autonomous system
-    IPv4(Ipv4Cidr),    // denotes an IPv4 address or address range
-    IPv6(Ipv6Cidr),    // denotes an IPv4 address or address range
-    Signer(PublicKey), // denotes a signer
-    Url(String), // denotes an URL, for example a contact form
+    Domain(String),     // denotes a domain name
+    EMail(String),      // denotes an e-mail address (localpart@domain)
+    AS(u32),            // denotes an autonomous system
+    IPv4(Ipv4Cidr),     // denotes an IPv4 address or address range
+    IPv6(Ipv6Cidr),     // denotes an IPv4 address or address range
+    Signer(PublicKey),  // denotes a signer
+    Url(String),        // denotes an URL, for example a contact form
     HashValue(String), // hash of an e-mail or other data. may be used to cloak user data, or to secure URL contents
     Template(Template), // statement template to dynamically add new statement types
 }
@@ -83,6 +83,7 @@ impl FromStr for EntityType {
             "IPv4" => Self::IPv4,
             "IPv6" => Self::IPv6,
             "Signer" => Self::Signer,
+            "Url" => Self::Url,
             "HashValue" => Self::HashValue,
             "Template" => Self::Template,
             _ => return Err(InvalidEntityType),
@@ -93,7 +94,9 @@ impl FromStr for EntityType {
 
 impl Entity {
     pub fn hash_string(string: &str) -> Self {
-        let digest = Sha2_256::digest(string.as_bytes());
+        let mut hasher = Sha2_256::default();
+        hasher.update(string.as_bytes());
+        let digest = hasher.finalize();
         Self::HashValue(base64::encode(digest))
     }
 

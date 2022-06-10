@@ -1,6 +1,11 @@
+use axum::{extract::Path, routing::get, Extension, Json, Router};
+
 use itertools::Itertools;
-use rocket::{get, serde::json::Json, Config, State};
-use std::{str::FromStr, sync::Arc};
+use std::{
+    net::{IpAddr, Ipv6Addr, SocketAddr},
+    str::FromStr,
+    sync::Arc,
+};
 use tokio::sync::RwLock;
 
 use crate::{
@@ -8,13 +13,11 @@ use crate::{
     storage::Storage,
 };
 
-struct ManagedStorage {
-    storage: Arc<RwLock<Storage>>,
-}
-
-#[get("/<entity>")]
-async fn lookup(entity: String, state: &State<ManagedStorage>) -> Json<Vec<Statement>> {
-    let storage = state.storage.read().await;
+async fn lookup(
+    Path(entity): Path<String>,
+    state: Extension<Arc<RwLock<Storage>>>,
+) -> Json<Vec<Statement>> {
+    let storage = state.read().await;
     let entity = Entity::from_str(&entity).unwrap();
     let statements = storage
         .find_statements_about(&entity)
@@ -27,17 +30,13 @@ async fn lookup(entity: String, state: &State<ManagedStorage>) -> Json<Vec<State
 }
 
 pub async fn api(port: u16, storage: Arc<RwLock<Storage>>) -> Result<(), anyhow::Error> {
-    let managed_storage = ManagedStorage { storage };
-    let config = Config {
-        address: "127.0.0.1".parse().unwrap(),
-        port,
-        ..Config::default()
-    };
-    rocket::build()
-        .configure(config)
-        .manage(managed_storage)
-        .mount("/", routes![lookup])
-        .launch()
+    let addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port);
+    let routes = Router::new()
+        .route("/entity/:ent", get(lookup))
+        .layer(Extension(Arc::clone(&storage)));
+    let api = Router::new().nest("/api", routes);
+    axum::Server::bind(&addr)
+        .serve(api.into_make_service())
         .await?;
     Ok(())
 }

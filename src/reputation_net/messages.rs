@@ -17,6 +17,7 @@ pub enum BroadcastMessage {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum RpcRequest {
     TemplateRequest,
+    Announcement(SyncInfos),
     OpinionRequest { name: String, date: Date },
 }
 
@@ -44,4 +45,7 @@ pub enum Message {
         peer_id: PeerId,
         response: RpcResponse,
     },
+    SendAnnouncement {
+        peer_id: PeerId,
+    }
 }
