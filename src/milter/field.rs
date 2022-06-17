@@ -70,7 +70,7 @@ impl FieldValue {
             path: path.to_owned(),
         };
         tasks.spawn(async move { first.lookup().await });
-        while let Ok(Some(finished)) = tasks.join_one().await {
+        while let Some(Ok(finished)) = tasks.join_one().await {
             for next in finished {
                 if next.path.is_empty() {
                     results.push(next.value);
@@ -97,11 +97,11 @@ impl FieldValue {
             // other
             "cc" => self.cc().await,
             _ => {
-                log::error!("{} is not a valid field selector", part);
+                log::debug!("{} is not a valid field selector", part);
                 vec![]
             }
         };
-        println!("Lookup {} {:?} -> {:?}", self, part, result);
+        log::debug!("Lookup {} {:?} -> {:?}", self, part, result);
         result
     }
 
@@ -122,7 +122,7 @@ impl FieldValue {
         match self {
             Mail(s) => match s.find("@") {
                 Some(index) => return vec![Domain(s[index + 1..].to_owned())],
-                None => log::error!("{} does not have an @ sign", self),
+                None => log::debug!("{} does not have an @ sign", self),
             },
             Url(s) => match url::Url::parse(s) {
                 Ok(u) => {
@@ -134,10 +134,10 @@ impl FieldValue {
                         }
                     }
                 }
-                Err(e) => log::error!("{} URL parsing error: {:?}", self, e),
+                Err(e) => log::debug!("{} URL parsing error: {:?}", self, e),
             },
             Header(_s) => todo!(),
-            _ => log::error!("{} does not have a domain", self),
+            _ => log::debug!("{} does not have a domain", self),
         }
         vec![]
     }
@@ -149,7 +149,7 @@ impl FieldValue {
                 Some(index) => return vec![Self::Str(s[0..index].to_owned())],
                 None => log::error!("{} does not have an @ sign", self),
             },
-            _ => log::error!("{} does not have a localpart", self),
+            _ => log::debug!("{} does not have a localpart", self),
         }
         vec![]
     }
@@ -163,7 +163,7 @@ impl FieldValue {
                 }
                 Err(e) => log::error!("Error looking up A record for {}: {:?}", d, e),
             },
-            _ => log::error!("{} can not be used for DNS lookup", self),
+            _ => log::debug!("{} can not be used for DNS lookup", self),
         }
         vec![]
     }
@@ -177,7 +177,7 @@ impl FieldValue {
                 }
                 Err(e) => log::error!("Error looking up AAAA record for {}: {:?}", d, e),
             },
-            _ => log::error!("{} can not be used for DNS lookup", self),
+            _ => log::debug!("{} can not be used for DNS lookup", self),
         }
         vec![]
     }
@@ -194,7 +194,7 @@ impl FieldValue {
                 }
                 Err(e) => log::error!("Error looking up MX record for {}: {:?}", d, e),
             },
-            _ => log::error!("{} can not be used for DNS lookup", self),
+            _ => log::debug!("{} can not be used for DNS lookup", self),
         }
         vec![]
     }
@@ -211,7 +211,7 @@ impl FieldValue {
                 }
                 Err(e) => log::error!("Error looking up MX record for {}: {:?}", d, e),
             },
-            _ => log::error!("{} can not be used for DNS lookup", self),
+            _ => log::debug!("{} can not be used for DNS lookup", self),
         }
         vec![]
     }
@@ -225,7 +225,7 @@ impl FieldValue {
                 }
                 Err(e) => log::error!("Error looking up TXT record for {}: {:?}", d, e),
             },
-            _ => log::error!("{} can not be used for DNS lookup", self),
+            _ => log::debug!("{} can not be used for DNS lookup", self),
         }
         vec![]
     }
@@ -242,7 +242,7 @@ impl FieldValue {
                 }
                 Err(e) => log::error!("Error looking up PTR record for {}: {:?}", ip, e),
             },
-            _ => log::error!("{} can not be used for DNS lookup", self),
+            _ => log::debug!("{} can not be used for DNS lookup", self),
         }
         vec![]
     }
@@ -256,7 +256,7 @@ impl FieldValue {
                     return vec![Self::Str(string[len - 2..].into())];
                 }
             }
-            _ => log::error!("{} can not be used for CC lookup", self),
+            _ => log::debug!("{} can not be used for CC lookup", self),
         }
         vec![]
     }

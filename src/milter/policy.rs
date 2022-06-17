@@ -2,7 +2,6 @@ use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
 
 use cidr::Cidr;
 use lazy_static::lazy_static;
-use log::error;
 use mailparse::{addrparse_header, parse_header, MailAddr};
 use regex::Regex;
 use tokio::sync::RwLock;
@@ -109,19 +108,24 @@ impl PolicyAccumulator {
     }
 
     async fn lookup(&mut self, location: &Location, value: FieldValue) {
-        println!("looking up {} in {}", value, location);
+        log::debug!("looking up {} in {}", value, location);
         let prefix = location.prefix();
         for (rulename, rule) in &self.config.rules {
             for path in rule.paths_matching_prefix(&prefix) {
                 let values = value.lookup_path(path).await;
-                println!(
+                log::debug!(
                     "Found values {:?} in rule {} path {}",
-                    values, rulename, path
+                    values,
+                    rulename,
+                    path
                 );
+                let storage = &*self.storage.read().await;
                 for v in values {
-                    let storage = &*self.storage.read().await;
-                    if rule.matches_value(&v, &self.config, storage).await {
-                        println!("Rule {} matched {} in {}", rulename, value, location);
+                    if let Some(result) = rule.match_value(&v, &self.config, storage).await {
+                        println!(
+                            "Rule {} matched {} in {}: {:?}",
+                            rulename, value, location, result
+                        );
                     }
                 }
             }
@@ -266,7 +270,7 @@ impl PolicyAccumulator {
                 _ => (),
             }
         } else {
-            error!("could not parse header {}", data);
+            log::error!("could not parse header {}", data);
         }
     }
 

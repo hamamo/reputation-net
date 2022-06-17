@@ -19,7 +19,7 @@ field = [
     "header.received.ipv4",
 ]
 match = { reputation = "spammer" }
-reject = "${match} is listed as spam source"
+reject = "Listed as spam source"
 
 # Handle mail associated with exploited resources
 [rules.reject_exploited]
@@ -34,10 +34,11 @@ field = [
     "header.received.ipv4",
 ]
 match = { reputation = "exploited" }
-defer = "${match} is listed as spam source"
+defer = "Listed as spam source"
 
 # Some countries where no regular contacts exist.
-lists.bad-country = [
+[lists]
+bad-country = [
     "ar",
     "br",
     "mx",
@@ -70,4 +71,4 @@ hold = "Mail from this country is likely spam"
 [rules.reject-privateemail]
 field = "header.reply-to.domain.mx"
 match = "privateemail.com"
-reject = "Looks like spam"
+reject = "Looks like spam (privateemail.com MX)"

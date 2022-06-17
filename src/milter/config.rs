@@ -22,6 +22,7 @@ pub struct Config {
 
 #[derive(Deserialize, Debug)]
 pub struct Rule {
+    pub priority: Option<u8>,
     pub field: Option<FieldRef>,
     #[serde(rename = "match")]
     pub list: Option<List>,
@@ -50,6 +51,20 @@ pub enum FieldRef {
 #[derive(Deserialize, Debug)]
 pub struct Condition {}
 
+#[derive(Debug)]
+pub struct MatchResult {
+    pub field: String,
+    pub priority: u8,
+    pub action: Action,
+}
+
+#[derive(Debug)]
+pub enum Action {
+    Hold(String),
+    Reject(String),
+    Defer(String),
+}
+
 impl Rule {
     pub fn paths_matching_prefix(&self, prefix: &str) -> Vec<&str> {
         match &self.field {
@@ -58,16 +73,44 @@ impl Rule {
         }
     }
 
-    pub async fn matches_value(
+    pub async fn match_value(
         &self,
         value: &FieldValue,
         config: &Config,
         storage: &Storage,
-    ) -> bool {
+    ) -> Option<MatchResult> {
         match &self.list {
-            Some(list) => list.matches_value(value, config, storage).await,
-            None => false,
+            Some(list) => {
+                if list.matches_value(value, config, storage).await {
+                    let action = self.action();
+                    Some(MatchResult {
+                        field: self.field_name(),
+                        priority: self.priority.unwrap_or(5),
+                        action,
+                    })
+                } else {
+                    None
+                }
+            }
+            None => None,
         }
+    }
+
+    fn action(&self) -> Action {
+        use Action::*;
+        if let Some(reason) = &self.reject {
+            Reject(reason.into())
+        } else if let Some(reason) = &self.defer {
+            Defer(reason.into())
+        } else if let Some(reason) = &self.hold {
+            Hold(reason.into())
+        } else {
+            Hold("no reason given".into())
+        }
+    }
+
+    fn field_name(&self) -> String {
+        format!("{:?}", self.field)
     }
 }
 
@@ -93,16 +136,17 @@ impl List {
             },
             List::Reputation { reputation } => {
                 let data = value.data();
-                println!(
+                log::debug!(
                     "Reputation check: is {:?} in repnet-list {:?}?",
-                    data, reputation
+                    data,
+                    reputation
                 );
                 match Entity::from_str(&data) {
                     Ok(entity) => {
-                        println!("Entity: {:?}", entity);
+                        log::debug!("Entity: {:?}", entity);
                         let reputation_results =
                             storage.find_statements_about(&entity).await.unwrap();
-                        println!("Reputation Results: {:?}", reputation_results);
+                        log::debug!("Reputation Results: {:?}", reputation_results);
                         for statement in reputation_results {
                             if &statement.name == reputation {
                                 return true;
@@ -180,7 +224,7 @@ mod tests {
 
     #[test]
     fn parse_file() {
-        let config = Config::from_file("src/milter/policy_rules.toml").unwrap();
+        let config = Config::from_file("src/milter/milter.toml").unwrap();
         assert_eq!(
             config.rules["reject_dynamic"].reject.as_ref().unwrap(),
             "Mail from dynamic network range"
