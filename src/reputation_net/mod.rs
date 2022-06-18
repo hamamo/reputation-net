@@ -23,7 +23,7 @@ use libp2p::{
     NetworkBehaviour, PeerId,
 };
 
-use crate::storage::Persistent;
+use crate::storage::Id;
 
 use super::{
     model::{Date, Entity, SignedStatement, Statement, UnsignedOpinion},
@@ -188,7 +188,8 @@ impl ReputationNet {
 
     pub async fn sign_statement(
         &mut self,
-        statement: Persistent<Statement>,
+        statement: Statement,
+        statement_id: Id<Statement>,
     ) -> Option<SignedStatement> {
         let opinion = UnsignedOpinion {
             date: Date::today(),
@@ -199,16 +200,15 @@ impl ReputationNet {
         };
         let mut storage = self.storage.write().await;
         let own_key = storage.own_key();
-        let signed_opinion = opinion.sign_using(&statement.data.signable_bytes(), &own_key.key);
-        let signed_opinion = storage
-            .persist_opinion(signed_opinion, &statement.id)
+        let signed_opinion = opinion.sign_using(&statement.signable_bytes(), &own_key.key);
+        storage
+            .persist_opinion(&signed_opinion, statement_id)
             .await
-            .unwrap()
-            .data;
-        let _ = storage.update_last_used(vec![statement.id]).await;
+            .unwrap();
+        let _ = storage.update_last_used(vec![statement_id]).await;
         Some(SignedStatement {
-            statement: statement.data,
-            opinions: vec![signed_opinion.data],
+            statement: statement,
+            opinions: vec![signed_opinion],
         })
     }
 
@@ -281,19 +281,18 @@ impl ReputationNet {
             BroadcastMessage::Statement(signed_statement) => {
                 let statement = signed_statement.statement;
                 let mut storage = self.storage.write().await;
-                match storage.persist(statement).await {
+                match storage.persist(&statement).await {
                     Ok(persist_result) => {
-                        info!("{}", persist_result);
-                        let persistent_statement = &persist_result.data;
-                        for signed_opinion in signed_statement.opinions {
+                        info!("{}", persist_result.id);
+                        for signed_opinion in &signed_statement.opinions {
                             let result = storage
-                                .persist_opinion(signed_opinion, &persistent_statement.id)
+                                .persist_opinion(signed_opinion, persist_result.id)
                                 .await
                                 .expect("could insert opinion");
                             info!("{}", result);
                         }
-                        if persist_result.is_new() && persist_result.name == "template" {
-                            if let Entity::Template(template) = &persist_result.entities[0] {
+                        if persist_result.is_new() && statement.name == "template" {
+                            if let Entity::Template(template) = &statement.entities[0] {
                                 self.gossipsub
                                     .subscribe(&self.as_topic(&template.name))
                                     .unwrap();
@@ -383,17 +382,16 @@ impl ReputationNet {
         // println!("got response message {:?} from {}", response, peer_id);
         match response {
             RpcResponse::Statements(list) => {
-                for signed_statement in list {
+                for signed_statement in &list {
                     info!("got statement in response: {}", signed_statement.statement);
                     let mut storage = self.storage.write().await;
-                    let persistent_statement = storage
-                        .persist(signed_statement.statement)
+                    let persist_result = storage
+                        .persist(&signed_statement.statement)
                         .await
-                        .expect("could persist statement")
-                        .data;
-                    for opinion in signed_statement.opinions {
+                        .expect("could persist statement");
+                    for opinion in &signed_statement.opinions {
                         storage
-                            .persist_opinion(opinion, &persistent_statement.id)
+                            .persist_opinion(opinion, persist_result.id)
                             .await
                             .expect("could persist opinion");
                     }

@@ -33,7 +33,7 @@ pub struct Persistent<T> {
 /// A wrapper for the result of a persist() operation
 #[derive(Debug)]
 pub struct PersistResult<T> {
-    pub data: Persistent<T>,
+    pub id: Id<T>,
     pub inserted: bool,
 }
 
@@ -45,7 +45,7 @@ pub trait RowType {
 #[async_trait]
 pub trait Persist<T> {
     /// persist a record (find if old, insert if new)
-    async fn persist(&mut self, data: T) -> Result<PersistResult<T>, sqlx::Error>;
+    async fn persist(&mut self, data: &T) -> Result<PersistResult<T>, sqlx::Error>;
 }
 
 /// Get a single item by id, or all persistent items.
@@ -188,26 +188,19 @@ impl<T> Deref for Persistent<T> {
 }
 
 impl<T> PersistResult<T> {
-    pub fn new(id: Id<T>, data: T) -> Self {
-        Self {
-            inserted: true,
-            data: Persistent { id, data },
-        }
-    }
-    pub fn is_new(&self) -> bool {
-        self.inserted
+    pub fn new(id: Id<T>) -> Self {
+        Self { inserted: true, id }
     }
 
-    pub fn old(id: Id<T>, data: T) -> Self {
+    pub fn old(id: Id<T>) -> Self {
         Self {
             inserted: false,
-            data: Persistent { id, data },
+            id,
         }
     }
 
-    #[allow(dead_code)]
-    pub fn is_old(&self) -> bool {
-        !self.inserted
+    pub fn is_new(&self) -> bool {
+        self.inserted
     }
 }
 
@@ -220,19 +213,10 @@ where
         let colon = type_name.rfind(":").unwrap();
         write!(
             f,
-            "{} {} {} has id {}",
+            "{} {} has id {}",
             if self.inserted { "new" } else { "old" },
-            &type_name[colon+1..],
-            self.data.data,
-            self.data.id,
+            &type_name[colon + 1..],
+            self.id,
         )
-    }
-}
-
-impl<T> Deref for PersistResult<T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        &self.data.data
     }
 }

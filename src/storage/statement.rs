@@ -12,7 +12,7 @@ use super::{
 
 #[async_trait]
 impl Persist<Statement> for Storage {
-    async fn persist(&mut self, statement: Statement) -> Result<PersistResult<Statement>, Error> {
+    async fn persist(&mut self, statement: &Statement) -> Result<PersistResult<Statement>, Error> {
         // ensure that the statement matches an existing template
         if !self.has_matching_template(&statement) {
             error!("did not find matching template for {}", statement);
@@ -31,7 +31,7 @@ impl Persist<Statement> for Storage {
             .await?;
 
         let result = match result {
-            Some(id) => PersistResult::old(id, statement),
+            Some(id) => PersistResult::old(id),
             None => {
                 let insert_result = self
                     .try_insert_statement(
@@ -46,7 +46,7 @@ impl Persist<Statement> for Storage {
                     .await;
                 println!("inserted {}", statement);
                 match insert_result {
-                    Ok(id) => PersistResult::new(id, statement),
+                    Ok(id) => PersistResult::new(id),
                     Err(_) => {
                         let result = self
                             .try_select_statement(
@@ -58,21 +58,21 @@ impl Persist<Statement> for Storage {
                             )
                             .await?;
                         match result {
-                            Some(id) => PersistResult::old(id, statement),
+                            Some(id) => PersistResult::old(id),
                             None => panic!("could not insert statement"),
                         }
                     }
                 }
             }
         };
-        if result.name == "template" {
-            if let Entity::Template(template) = &result.entities[0] {
-                self.templates.insert(result.data.id, template.clone());
+        if statement.name == "template" {
+            if let Entity::Template(template) = &statement.entities[0] {
+                self.templates.insert(result.id, template.clone());
             }
         }
-        if result.name == "signer" {
-            if let Entity::Signer(signer) = &result.entities[0] {
-                self.signers.insert(result.data.id, signer.clone());
+        if statement.name == "signer" {
+            if let Entity::Signer(signer) = &statement.entities[0] {
+                self.signers.insert(result.id, signer.clone());
             }
         }
         Ok(result)

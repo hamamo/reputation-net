@@ -1,7 +1,10 @@
 use std::{error::Error, time::Duration};
 
 use clap::Parser;
+
+#[cfg(debug_assertions)]
 use console_subscriber;
+
 use futures::{
     channel::mpsc::{channel, Receiver},
     StreamExt,

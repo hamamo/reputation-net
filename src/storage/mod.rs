@@ -69,20 +69,20 @@ impl Storage {
 
         // insert the root template, this is currently manual
         let template_statement = Statement::from_str("template(template(Template))").unwrap();
-        let template_statement = self.persist(template_statement).await?.data;
+        self.persist(&template_statement).await?;
 
         // insert the "signer" template
         let signer_statement = Statement::from_str("template(signer(Signer))").unwrap();
-        let signer_statement = self.persist(signer_statement).await?.data;
+        self.persist(&signer_statement).await?;
 
         // make sure an owner trust entry exists
         self.ensure_own_key().await?;
 
         // sign the predefined statements with it
         let own_key = self.own_key.clone();
-        self.sign_statement_default(template_statement.data, &own_key)
+        self.sign_statement_default(&template_statement, &own_key)
             .await?;
-        self.sign_statement_default(signer_statement.data, &own_key)
+        self.sign_statement_default(&signer_statement, &own_key)
             .await?;
 
         // fill templates and signers
@@ -349,12 +349,12 @@ impl Storage {
 
     pub async fn persist_statement_hashing_emails(
         &mut self,
-        statement: Statement,
+        statement: &Statement,
     ) -> Result<PersistResult<Statement>, Error> {
         // if the statement template can't be found, retry with hashed e-mails
         // the return value include the possibly translated statement
-        if self.requires_email_hashing(&statement) {
-            self.persist(statement.hash_emails()).await
+        if self.requires_email_hashing(statement) {
+            self.persist(&statement.hash_emails()).await
         } else {
             self.persist(statement).await
         }
@@ -362,19 +362,19 @@ impl Storage {
 
     pub async fn persist_opinion(
         &mut self,
-        opinion: Opinion,
-        statement_id: &Id<Statement>,
+        opinion: &Opinion,
+        statement_id: Id<Statement>,
     ) -> Result<PersistResult<Opinion>, Error> {
         // this actually persists a signed opinion. Raw opinions without signature are only used for temporary purposes.
         let signer = Statement::signer(Entity::Signer(opinion.signer.clone()));
-        let signer_result = self.persist(signer).await.unwrap().data;
+        let signer_id = self.persist(&signer).await?.id;
         let opinion_data = &opinion.data;
 
         let prev_opinion_result = sqlx::query_as::<DB, (Id<Opinion>, Date, u8)>(
             "select id,date,serial from opinion where statement_id = ? and signer_id = ?",
         )
         .bind(statement_id)
-        .bind(signer_result.id)
+        .bind(signer_id)
         .fetch_optional(&self.pool)
         .await?;
         if let Some((old_id, date, serial)) = prev_opinion_result {
@@ -388,13 +388,13 @@ impl Storage {
                     .await
                     .expect("could delete old opinion");
             } else {
-                return Ok(PersistResult::old(old_id, opinion));
+                return Ok(PersistResult::old(old_id));
             }
         }
         let mut tx = self.pool.begin().await.unwrap();
         sqlx::query("insert into opinion(statement_id, signer_id, date, valid, serial, certainty, signature) values(?,?,?,?,?,?,?)")
             .bind(statement_id)
-            .bind(signer_result.id)
+            .bind(signer_id)
             .bind(opinion_data.date)
             .bind(opinion_data.valid)
             .bind(opinion_data.serial)
@@ -408,12 +408,12 @@ impl Storage {
             .fetch_one(&mut tx)
             .await?;
         tx.commit().await?;
-        Ok(PersistResult::new(id, opinion))
+        Ok(PersistResult::new(id))
     }
 
     pub async fn sign_statement_default(
         &mut self,
-        statement: Statement,
+        statement: &Statement,
         own_key: &OwnKey,
     ) -> Result<PersistResult<Opinion>, Error> {
         let opinion = UnsignedOpinion {
@@ -424,9 +424,9 @@ impl Storage {
             comment: "".into(),
         };
         let signed_opinion = opinion.sign_using(&statement.signable_bytes(), &own_key.key);
-        let statement_id = self.persist(statement).await?.data.id;
+        let statement_id = self.persist(&statement).await?.id;
         self.update_last_used(vec![statement_id]).await?;
-        self.persist_opinion(signed_opinion, &statement_id).await
+        self.persist_opinion(&signed_opinion, statement_id).await
     }
 
     pub async fn find_statements_about(
@@ -485,15 +485,15 @@ impl Storage {
             _ => {
                 let own_key = OwnKey::new();
                 let statement = Statement::signer(own_key.signer.clone());
-                let persistent_statement = self.persist(statement).await?.data;
+                let statement_id = self.persist(&statement).await?.id;
                 let privkey = own_key.privkey_string();
-                info!("trust {} {}", persistent_statement.id, privkey);
+                info!("trust {} {}", statement_id, privkey);
                 let mut tx = self.pool.begin().await.unwrap();
                 sqlx::query(&format!(
                     "insert into {} (signer_id, key) values(?,?)",
                     DbPrivateKey::TABLE
                 ))
-                .bind(persistent_statement.id)
+                .bind(statement_id)
                 .bind(privkey)
                 .execute(&mut tx)
                 .await?;
@@ -611,8 +611,8 @@ mod tests {
         rt.block_on(storage.initialize_database())
             .expect("could initialize database");
         let statement = Statement::from_str("template(template(Template))").unwrap();
-        let persist_result = rt.block_on(storage.persist(statement)).unwrap().data;
-        assert!(persist_result.id >= Id::new(1));
+        let statement_id = rt.block_on(storage.persist(&statement)).unwrap();
+        assert!(statement_id.id >= Id::new(1));
     }
 
     #[test]

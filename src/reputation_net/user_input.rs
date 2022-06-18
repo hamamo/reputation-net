@@ -34,12 +34,15 @@ impl ReputationNet {
                     .storage
                     .write()
                     .await
-                    .persist_statement_hashing_emails(statement)
+                    .persist_statement_hashing_emails(&statement)
                     .await;
                 match result {
-                    Ok(actual_statement) => {
-                        println!("{}", actual_statement);
-                        let signed_statement = self.sign_statement(actual_statement.data).await.unwrap();
+                    Ok(persist_result) => {
+                        println!("{}", persist_result);
+                        let signed_statement = self
+                            .sign_statement(statement, persist_result.id)
+                            .await
+                            .unwrap();
                         self.publish_statement(signed_statement);
                     }
                     Err(_e) => {

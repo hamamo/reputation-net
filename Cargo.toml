@@ -10,11 +10,8 @@ autonat = []
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", features = [
-    "dns-tokio",
-    "tcp-tokio",
-] }
-# libp2p = {path = "rust-libp2p"}
+#alternative: git = "https://github.com/libp2p/rust-libp2p.git"
+libp2p = { version = "*", features = ["dns-tokio", "tcp-tokio"] }
 futures = "*"
 cidr = "*"
 sha2 = "*"
