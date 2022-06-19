@@ -343,7 +343,7 @@ impl Storage {
         Ok(id)
     }
 
-    fn requires_email_hashing(&self, statement: &Statement) -> bool {
+    pub fn requires_email_hashing(&self, statement: &Statement) -> bool {
         !self.has_matching_template(statement)
     }
 

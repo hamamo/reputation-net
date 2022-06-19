@@ -6,7 +6,7 @@ use tokio::io::{stdin, AsyncBufReadExt, BufReader};
 
 use log::{error, info};
 
-use crate::model::{Date, Statement};
+use crate::{model::{Date, Statement}, storage::Persist};
 
 /// functions handling user input (currently simple stdin, will be changed to handle readline and proper output)
 use super::{Entity, ReputationNet};
@@ -30,12 +30,12 @@ impl ReputationNet {
         match what.parse::<Statement>() {
             Ok(statement) => {
                 let template = statement.specific_template();
-                let result = self
-                    .storage
-                    .write()
-                    .await
-                    .persist_statement_hashing_emails(&statement)
-                    .await;
+                let statement = if self.storage.read().await.has_matching_template(&statement) {
+                    statement
+                } else {
+                    statement.hash_emails()
+                };
+                let result = self.storage.write().await.persist(&statement).await;
                 match result {
                     Ok(persist_result) => {
                         println!("{}", persist_result);
