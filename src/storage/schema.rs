@@ -16,8 +16,6 @@ pub struct DbStatement {
     pub name: String,
     pub entity_1: String,
     pub entity_2: Option<String>,
-    pub entity_3: Option<String>,
-    pub entity_4: Option<String>,
     pub last_used: Option<DateTime<Utc>>,
     pub last_weight: Option<f32>,
 }
@@ -53,8 +51,6 @@ impl RowType for DbStatement {
         statement.name,
         statement.entity_1,
         statement.entity_2,
-        statement.entity_3,
-        statement.entity_4,
         statement.last_used,
         statement.last_weight";
 }
@@ -79,8 +75,6 @@ impl RowType for DbStatementWithOpinion {
         statement.name,
         statement.entity_1,
         statement.entity_2,
-        statement.entity_3,
-        statement.entity_4,
         statement.last_used,
         statement.last_weight,
         opinion.id,
@@ -112,21 +106,19 @@ where
             name: row.get(1),
             entity_1: row.get(2),
             entity_2: row.get(3),
-            entity_3: row.get(4),
-            entity_4: row.get(5),
-            last_used: row.get(6),
-            last_weight: row.get(7),
+            last_used: row.get(4),
+            last_weight: row.get(5),
         };
         let opinion = DbOpinion {
-            id: row.get(8),
-            statement_id: row.get(9),
-            signer_id: row.get(10),
-            date: row.get(11),
-            valid: row.get(12),
-            serial: row.get(13),
-            certainty: row.get(14),
-            comment: row.get(15),
-            signature: row.get(16),
+            id: row.get(6),
+            statement_id: row.get(7),
+            signer_id: row.get(8),
+            date: row.get(9),
+            valid: row.get(10),
+            serial: row.get(11),
+            certainty: row.get(12),
+            comment: row.get(13),
+            signature: row.get(14),
         };
         Ok(Self { statement, opinion })
     }
@@ -142,12 +134,6 @@ impl From<DbStatement> for Statement {
     fn from(row: DbStatement) -> Statement {
         let mut entities = vec![Entity::from_str(&row.entity_1.as_str()).unwrap()];
         if let Some(entity) = row.entity_2 {
-            entities.push(Entity::from_str(&entity.as_str()).unwrap())
-        }
-        if let Some(entity) = row.entity_3 {
-            entities.push(Entity::from_str(&entity.as_str()).unwrap())
-        }
-        if let Some(entity) = row.entity_4 {
             entities.push(Entity::from_str(&entity.as_str()).unwrap())
         }
         Statement {

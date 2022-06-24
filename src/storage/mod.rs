@@ -280,30 +280,16 @@ impl Storage {
         name: &str,
         entity_1: &str,
         entity_2: &Option<String>,
-        entity_3: &Option<String>,
-        entity_4: &Option<String>,
     ) -> Result<Option<Id<Statement>>, Error> {
         let mut sql = "select id from statement where name=? and entity_1=?".to_owned();
         if let Some(_) = entity_2 {
             sql.push_str(" and entity_2=?");
-            if let Some(_) = entity_3 {
-                sql.push_str(" and entity_3=?");
-                if let Some(_) = entity_4 {
-                    sql.push_str(" and entity_4=?");
-                }
-            }
         }
         let mut query = sqlx::query_scalar::<DB, Id<Statement>>(&sql)
             .bind(name)
             .bind(entity_1);
         if let Some(s) = entity_2 {
             query = query.bind(s);
-            if let Some(s) = entity_3 {
-                query = query.bind(s);
-                if let Some(s) = entity_3 {
-                    query = query.bind(s)
-                }
-            }
         }
         match query.fetch_optional(&self.pool).await? {
             Some(id) => Ok(Some(id)),
@@ -316,23 +302,19 @@ impl Storage {
         name: &str,
         entity_1: &str,
         entity_2: &Option<String>,
-        entity_3: &Option<String>,
-        entity_4: &Option<String>,
         cidr_min: &Option<String>,
         cidr_max: &Option<String>,
     ) -> Result<Id<Statement>, Error> {
         let mut tx = self.pool.begin().await?;
         let query = sqlx::query::<DB>(
             "insert into
-            statement(name, entity_1, entity_2, entity_3, entity_4, cidr_min, cidr_max)
-            values(?,?,?,?,?,?,?)
+            statement(name, entity_1, entity_2, cidr_min, cidr_max)
+            values(?,?,?,?,?)
             ",
         )
         .bind(name)
         .bind(entity_1)
         .bind(entity_2)
-        .bind(entity_3)
-        .bind(entity_4)
         .bind(cidr_min)
         .bind(cidr_max);
         query.execute(&mut tx).await?;

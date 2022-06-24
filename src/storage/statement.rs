@@ -22,12 +22,10 @@ impl Persist<Statement> for Storage {
         let entity_1 = statement.entities[0].to_string();
         let (cidr_min, cidr_max) = statement.entities[0].cidr_minmax();
         let entity_2 = statement.entities.get(1).and_then(|e| Some(e.to_string()));
-        let entity_3 = statement.entities.get(2).and_then(|e| Some(e.to_string()));
-        let entity_4 = statement.entities.get(3).and_then(|e| Some(e.to_string()));
 
         // first try to find existing statement
         let result = self
-            .try_select_statement(&statement.name, &entity_1, &entity_2, &entity_3, &entity_4)
+            .try_select_statement(&statement.name, &entity_1, &entity_2)
             .await?;
 
         let result = match result {
@@ -38,13 +36,11 @@ impl Persist<Statement> for Storage {
                         &statement.name,
                         &entity_1,
                         &entity_2,
-                        &entity_3,
-                        &entity_4,
                         &cidr_min,
                         &cidr_max,
                     )
                     .await;
-                println!("inserted {}", statement);
+                // println!("inserted {}", statement);
                 match insert_result {
                     Ok(id) => PersistResult::new(id),
                     Err(_) => {
@@ -53,8 +49,6 @@ impl Persist<Statement> for Storage {
                                 &statement.name,
                                 &entity_1,
                                 &entity_2,
-                                &entity_3,
-                                &entity_4,
                             )
                             .await?;
                         match result {
@@ -144,12 +138,6 @@ impl Convert<DbStatement, Persistent<Statement>> for Storage {
     async fn convert(&self, from: DbStatement) -> Result<Persistent<Statement>, Error> {
         let mut entities = vec![Entity::from_str(from.entity_1.as_str()).unwrap()];
         if let Some(entity) = from.entity_2 {
-            entities.push(Entity::from_str(entity.as_str()).unwrap())
-        }
-        if let Some(entity) = from.entity_3 {
-            entities.push(Entity::from_str(entity.as_str()).unwrap())
-        }
-        if let Some(entity) = from.entity_4 {
             entities.push(Entity::from_str(entity.as_str()).unwrap())
         }
         Ok(Persistent {
