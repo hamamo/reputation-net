@@ -38,7 +38,7 @@ impl ReputationNet {
                 let result = self.storage.write().await.persist(&statement).await;
                 match result {
                     Ok(persist_result) => {
-                        println!("{}", persist_result);
+                        // println!("{}", persist_result);
                         let signed_statement = self
                             .sign_statement(statement, persist_result.id)
                             .await
