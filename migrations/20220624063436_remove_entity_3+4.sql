@@ -10,13 +10,25 @@ DROP INDEX idx_entity_1;
 
 ALTER TABLE statement RENAME TO old_statement;
 
-CREATE TABLE statement AS
+CREATE TABLE statement (
+    id integer primary key,
+    name text not null,
+    entity_1 text not null,
+    entity_2 text,
+    cidr_min text,
+    cidr_max text,
+    last_used REAL,
+    last_weight REAL,
+    unique(name,entity_1,entity_2)
+);
+
+INSERT INTO statement(id, name, entity_1, entity_2, cidr_min, cidr_max, last_used, last_weight)
     SELECT id, name, entity_1, entity_2, cidr_min, cidr_max, last_used, last_weight
     FROM old_statement;
 
-create index if not exists idx_cidr_min on statement(cidr_min);
-create index if not exists idx_cidr_max on statement(cidr_max);
-create index if not exists idx_entity_1 on statement(entity_1);
+CREATE INDEX IF NOT EXISTS idx_cidr_min on statement(cidr_min);
+CREATE INDEX IF NOT EXISTS idx_cidr_max on statement(cidr_max);
+CREATE INDEX IF NOT EXISTS idx_entity_1 on statement(entity_1);
 
 DROP TABLE old_statement;
 
